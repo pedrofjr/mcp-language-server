@@ -134,7 +134,11 @@ func (s *mcpServer) initializeOmniPascal() error {
 		return fmt.Errorf("failed to change to workspace directory: %v", err)
 	}
 
-	client, err := omnipascal.NewClient(s.config.lspCommand, s.config.lspArgs...)
+	startupArgs := make([]string, 0, len(s.config.lspArgs)+1)
+	startupArgs = append(startupArgs, fmt.Sprintf("--workspacePaths=%s", s.config.workspaceDir))
+	startupArgs = append(startupArgs, s.config.lspArgs...)
+
+	client, err := omnipascal.NewClient(s.config.lspCommand, startupArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to create OmniPascal client: %v", err)
 	}

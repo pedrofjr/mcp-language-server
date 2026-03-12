@@ -395,6 +395,7 @@ func (c *Client) writeRequest(msg request) error {
 
 func readMessage(r *bufio.Reader) ([]byte, error) {
 	var contentLength int
+	headerStarted := false
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -402,9 +403,14 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 		}
 
 		trimmed := strings.TrimSpace(line)
+		if trimmed == "" && !headerStarted {
+			continue
+		}
+
 		if trimmed == "" {
 			break
 		}
+		headerStarted = true
 
 		omniWireLogger.Debug("<- OmniPascal header: %s", trimmed)
 

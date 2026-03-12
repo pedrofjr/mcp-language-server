@@ -23,6 +23,20 @@ func TestReadMessage(t *testing.T) {
 	}
 }
 
+func TestReadMessageSkipsLeadingBlankLine(t *testing.T) {
+	payload := []byte(`{"type":"response","request_seq":2,"success":true,"body":[]}`)
+	message := fmt.Sprintf("\r\nContent-Length: %d\r\n\r\n%s", len(payload), payload)
+
+	got, err := readMessage(bufio.NewReader(bytes.NewBufferString(message)))
+	if err != nil {
+		t.Fatalf("readMessage() error = %v", err)
+	}
+
+	if string(got) != string(payload) {
+		t.Fatalf("readMessage() = %s, want %s", got, payload)
+	}
+}
+
 func TestHandleEventCachesDiagnostics(t *testing.T) {
 	client := &Client{
 		syntaxDiagnostics:   make(map[string][]Diagnostic),
