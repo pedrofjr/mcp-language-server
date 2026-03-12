@@ -8,11 +8,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/logging"
 	"github.com/isaacphi/mcp-language-server/internal/lsp"
+	"github.com/isaacphi/mcp-language-server/internal/omnipascal"
 	"github.com/isaacphi/mcp-language-server/internal/watcher"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -24,11 +26,13 @@ type config struct {
 	workspaceDir string
 	lspCommand   string
 	lspArgs      []string
+	backend      string
 }
 
 type mcpServer struct {
 	config           config
 	lspClient        *lsp.Client
+	omniClient       *omnipascal.Client
 	mcpServer        *server.MCPServer
 	ctx              context.Context
 	cancelFunc       context.CancelFunc
@@ -39,6 +43,7 @@ func parseConfig() (*config, error) {
 	cfg := &config{}
 	flag.StringVar(&cfg.workspaceDir, "workspace", "", "Path to workspace directory")
 	flag.StringVar(&cfg.lspCommand, "lsp", "", "LSP command to run (args should be passed after --)")
+	flag.StringVar(&cfg.backend, "backend", "auto", "Backend protocol to use: auto, lsp, or omnipascal")
 	flag.Parse()
 
 	// Get remaining args after -- as LSP arguments
@@ -68,7 +73,28 @@ func parseConfig() (*config, error) {
 		return nil, fmt.Errorf("LSP command not found: %s", cfg.lspCommand)
 	}
 
+	backend, err := resolveBackend(cfg.backend, cfg.lspCommand)
+	if err != nil {
+		return nil, err
+	}
+	cfg.backend = backend
+
 	return cfg, nil
+}
+
+func resolveBackend(mode, command string) (string, error) {
+	switch strings.ToLower(mode) {
+	case "auto":
+		base := strings.ToLower(filepath.Base(command))
+		if strings.Contains(base, "omnipascal") {
+			return "omnipascal", nil
+		}
+		return "lsp", nil
+	case "lsp", "omnipascal":
+		return strings.ToLower(mode), nil
+	default:
+		return "", fmt.Errorf("unsupported backend %q, expected auto, lsp, or omnipascal", mode)
+	}
 }
 
 func newServer(config *config) (*mcpServer, error) {
@@ -103,9 +129,34 @@ func (s *mcpServer) initializeLSP() error {
 	return client.WaitForServerReady(s.ctx)
 }
 
+func (s *mcpServer) initializeOmniPascal() error {
+	if err := os.Chdir(s.config.workspaceDir); err != nil {
+		return fmt.Errorf("failed to change to workspace directory: %v", err)
+	}
+
+	client, err := omnipascal.NewClient(s.config.lspCommand, s.config.lspArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to create OmniPascal client: %v", err)
+	}
+	s.omniClient = client
+
+	if err := client.SynchronizeConfig(s.ctx, s.config.workspaceDir); err != nil {
+		return fmt.Errorf("failed to synchronize OmniPascal config: %v", err)
+	}
+
+	return nil
+}
+
 func (s *mcpServer) start() error {
-	if err := s.initializeLSP(); err != nil {
-		return err
+	switch s.config.backend {
+	case "omnipascal":
+		if err := s.initializeOmniPascal(); err != nil {
+			return err
+		}
+	default:
+		if err := s.initializeLSP(); err != nil {
+			return err
+		}
 	}
 
 	s.mcpServer = server.NewMCPServer(
@@ -231,6 +282,13 @@ func cleanup(s *mcpServer, done chan struct{}) {
 		coreLogger.Info("Closing LSP client")
 		if err := s.lspClient.Close(); err != nil {
 			coreLogger.Error("Failed to close LSP client: %v", err)
+		}
+	}
+
+	if s.omniClient != nil {
+		coreLogger.Info("Closing OmniPascal client")
+		if err := s.omniClient.Close(); err != nil {
+			coreLogger.Error("Failed to close OmniPascal client: %v", err)
 		}
 	}
 

@@ -9,6 +9,14 @@ import (
 )
 
 func (s *mcpServer) registerTools() error {
+	if s.omniClient != nil {
+		return s.registerOmniPascalTools()
+	}
+
+	return s.registerLSPTools()
+}
+
+func (s *mcpServer) registerLSPTools() error {
 	coreLogger.Debug("Registering MCP tools")
 
 	applyTextEditTool := mcp.NewTool("edit_file",
