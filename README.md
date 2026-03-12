@@ -238,6 +238,7 @@ A [justfile](https://just.systems/man/en/) is included for convenience:
 just -l
 Available recipes:
     build    # Build
+    build-win # Build for Windows
     check    # Run code audit checks
     fmt      # Format code
     generate # Generate LSP types and methods
@@ -246,6 +247,22 @@ Available recipes:
     snapshot # Update snapshot tests
     test     # Run tests
 ```
+
+### Build on Windows
+
+On Windows, build the executable with the `.exe` suffix so MCP clients and subprocess launches can execute it directly:
+
+```powershell
+go build -o mcp-language-server.exe
+```
+
+If you use `just`, the repository now includes a Windows-specific recipe:
+
+```powershell
+just build-win
+```
+
+The resulting binary will be `mcp-language-server.exe` in the repository root.
 
 Configure your Claude Desktop (or similar) to use the local binary:
 

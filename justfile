@@ -6,6 +6,10 @@ help:
 build:
   go build -o mcp-language-server
 
+# Build for Windows
+build-win:
+  go build -o mcp-language-server.exe
+
 # Install locally
 install:
   go install
