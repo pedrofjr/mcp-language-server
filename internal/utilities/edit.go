@@ -20,9 +20,22 @@ var (
 	osRename    = os.Rename
 )
 
+func pathFromDocumentURI(uri protocol.DocumentUri) (path string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("invalid file URI %q: %v", uri, recovered)
+		}
+	}()
+
+	return uri.Path(), nil
+}
+
 // ApplyTextEdits applies a sequence of text edits to a file specified by URI
 func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
-	path := strings.TrimPrefix(string(uri), "file://")
+	path, err := pathFromDocumentURI(uri)
+	if err != nil {
+		return fmt.Errorf("failed to resolve file path: %w", err)
+	}
 
 	// Read the file content
 	content, err := osReadFile(path)
@@ -173,7 +186,10 @@ func ApplyTextEdit(lines []string, edit protocol.TextEdit, lineEnding string) ([
 // ApplyDocumentChange applies a DocumentChange (create/rename/delete operations)
 func ApplyDocumentChange(change protocol.DocumentChange) error {
 	if change.CreateFile != nil {
-		path := strings.TrimPrefix(string(change.CreateFile.URI), "file://")
+		path, err := pathFromDocumentURI(change.CreateFile.URI)
+		if err != nil {
+			return fmt.Errorf("failed to resolve create path: %w", err)
+		}
 		if change.CreateFile.Options != nil {
 			if change.CreateFile.Options.Overwrite {
 				// Proceed with overwrite
@@ -189,7 +205,10 @@ func ApplyDocumentChange(change protocol.DocumentChange) error {
 	}
 
 	if change.DeleteFile != nil {
-		path := strings.TrimPrefix(string(change.DeleteFile.URI), "file://")
+		path, err := pathFromDocumentURI(change.DeleteFile.URI)
+		if err != nil {
+			return fmt.Errorf("failed to resolve delete path: %w", err)
+		}
 		if change.DeleteFile.Options != nil && change.DeleteFile.Options.Recursive {
 			if err := osRemoveAll(path); err != nil {
 				return fmt.Errorf("failed to delete directory recursively: %w", err)
@@ -202,8 +221,14 @@ func ApplyDocumentChange(change protocol.DocumentChange) error {
 	}
 
 	if change.RenameFile != nil {
-		oldPath := strings.TrimPrefix(string(change.RenameFile.OldURI), "file://")
-		newPath := strings.TrimPrefix(string(change.RenameFile.NewURI), "file://")
+		oldPath, err := pathFromDocumentURI(change.RenameFile.OldURI)
+		if err != nil {
+			return fmt.Errorf("failed to resolve source rename path: %w", err)
+		}
+		newPath, err := pathFromDocumentURI(change.RenameFile.NewURI)
+		if err != nil {
+			return fmt.Errorf("failed to resolve target rename path: %w", err)
+		}
 		if change.RenameFile.Options != nil {
 			if !change.RenameFile.Options.Overwrite {
 				if _, err := osStat(newPath); err == nil {

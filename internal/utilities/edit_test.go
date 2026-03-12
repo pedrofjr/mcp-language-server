@@ -3,8 +3,8 @@ package utilities
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +16,61 @@ type mockFileSystem struct {
 	files     map[string][]byte
 	fileStats map[string]os.FileInfo
 	errors    map[string]error
+}
+
+func mockPathCandidates(path string) []string {
+	candidates := []string{
+		path,
+		filepath.ToSlash(path),
+		filepath.FromSlash(path),
+		filepath.Clean(path),
+		filepath.Clean(filepath.FromSlash(path)),
+		filepath.Clean(filepath.ToSlash(path)),
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		result = append(result, candidate)
+	}
+
+	return result
+}
+
+func findMockError(mfs *mockFileSystem, path, suffix string) (error, bool) {
+	for _, candidate := range mockPathCandidates(path) {
+		if err, ok := mfs.errors[candidate+suffix]; ok {
+			return err, true
+		}
+	}
+	return nil, false
+}
+
+func findMockContent(mfs *mockFileSystem, path string) ([]byte, bool) {
+	for _, candidate := range mockPathCandidates(path) {
+		if content, ok := mfs.files[candidate]; ok {
+			return content, true
+		}
+	}
+	return nil, false
+}
+
+func hasMockContent(mfs *mockFileSystem, path string) bool {
+	_, ok := findMockContent(mfs, path)
+	return ok
+}
+
+func findMockStat(mfs *mockFileSystem, path string) (os.FileInfo, bool) {
+	for _, candidate := range mockPathCandidates(path) {
+		if info, ok := mfs.fileStats[candidate]; ok {
+			return info, true
+		}
+	}
+	return nil, false
 }
 
 // Setup mock file system functions
@@ -30,68 +85,79 @@ func setupMockFileSystem(_ *testing.T, mfs *mockFileSystem) func() {
 
 	// Replace with mocks
 	osReadFile = func(filename string) ([]byte, error) {
-		if err, ok := mfs.errors[filename+"_read"]; ok {
+		if err, ok := findMockError(mfs, filename, "_read"); ok {
 			return nil, err
 		}
-		if content, ok := mfs.files[filename]; ok {
+		if content, ok := findMockContent(mfs, filename); ok {
 			return content, nil
 		}
 		return nil, os.ErrNotExist
 	}
 
 	osWriteFile = func(filename string, data []byte, perm os.FileMode) error {
-		if err, ok := mfs.errors[filename+"_write"]; ok {
+		if err, ok := findMockError(mfs, filename, "_write"); ok {
 			return err
 		}
 		if mfs.files == nil {
 			mfs.files = make(map[string][]byte)
 		}
-		mfs.files[filename] = data
+		for _, candidate := range mockPathCandidates(filename) {
+			delete(mfs.files, candidate)
+		}
+		mfs.files[filepath.Clean(filepath.FromSlash(filename))] = data
 		return nil
 	}
 
 	osStat = func(name string) (os.FileInfo, error) {
-		if err, ok := mfs.errors[name+"_stat"]; ok {
+		if err, ok := findMockError(mfs, name, "_stat"); ok {
 			return nil, err
 		}
-		if info, ok := mfs.fileStats[name]; ok {
+		if info, ok := findMockStat(mfs, name); ok {
 			return info, nil
 		}
 		return nil, os.ErrNotExist
 	}
 
 	osRemove = func(name string) error {
-		if err, ok := mfs.errors[name+"_remove"]; ok {
+		if err, ok := findMockError(mfs, name, "_remove"); ok {
 			return err
 		}
-		if _, ok := mfs.files[name]; ok {
-			delete(mfs.files, name)
-			return nil
+		for _, candidate := range mockPathCandidates(name) {
+			if _, ok := mfs.files[candidate]; ok {
+				delete(mfs.files, candidate)
+				return nil
+			}
 		}
 		return os.ErrNotExist
 	}
 
 	osRemoveAll = func(path string) error {
-		if err, ok := mfs.errors[path+"_removeall"]; ok {
+		if err, ok := findMockError(mfs, path, "_removeall"); ok {
 			return err
 		}
 		// Remove any file that starts with this path
+		normalizedCandidates := mockPathCandidates(path)
 		for k := range mfs.files {
-			if k == path || (len(k) > len(path) && k[:len(path)] == path) {
-				delete(mfs.files, k)
+			for _, candidate := range normalizedCandidates {
+				if k == candidate || (len(k) > len(candidate) && k[:len(candidate)] == candidate) {
+					delete(mfs.files, k)
+					break
+				}
 			}
 		}
 		return nil
 	}
 
 	osRename = func(oldpath, newpath string) error {
-		if err, ok := mfs.errors[oldpath+"_rename"]; ok {
+		if err, ok := findMockError(mfs, oldpath, "_rename"); ok {
 			return err
 		}
-		if content, ok := mfs.files[oldpath]; ok {
-			mfs.files[newpath] = content
-			delete(mfs.files, oldpath)
-			return nil
+		for _, candidate := range mockPathCandidates(oldpath) {
+			if content, ok := mfs.files[candidate]; ok {
+				mfs.files[filepath.Clean(filepath.FromSlash(newpath))] = content
+				delete(mfs.files, candidate)
+				return nil
+			}
 		}
 		return os.ErrNotExist
 	}
@@ -493,6 +559,27 @@ func TestApplyTextEdits(t *testing.T) {
 			},
 		},
 		{
+			name:    "Windows path with spaces",
+			uri:     "file:///C:/Users/pedro/Downloads/Projeto%20Teste/Unit1.pas",
+			content: "unit Unit1;",
+			edits: []protocol.TextEdit{
+				{
+					Range: protocol.Range{
+						Start: protocol.Position{Line: 0, Character: 11},
+						End:   protocol.Position{Line: 0, Character: 11},
+					},
+					NewText: "\r\n\r\ninterface",
+				},
+			},
+			expected:  "unit Unit1;\r\n\r\ninterface",
+			expectErr: false,
+			setupMocks: func(mfs *mockFileSystem) {
+				mfs.files = map[string][]byte{
+					filepath.FromSlash("C:/Users/pedro/Downloads/Projeto Teste/Unit1.pas"): []byte("unit Unit1;"),
+				}
+			},
+		},
+		{
 			name:    "Multiple edits - non-overlapping",
 			uri:     "file:///test/file.txt",
 			content: "This is a test line",
@@ -653,7 +740,10 @@ func TestApplyTextEdits(t *testing.T) {
 				if err != nil {
 					t.Errorf("Unexpected error: %v", err)
 				} else {
-					path := strings.TrimPrefix(string(tt.uri), "file://")
+					path, pathErr := pathFromDocumentURI(tt.uri)
+					if pathErr != nil {
+						t.Fatalf("pathFromDocumentURI() error = %v", pathErr)
+					}
 					if content, ok := mfs.files[path]; ok {
 						if string(content) != tt.expected {
 							t.Errorf("applyTextEdits() result = %q, want %q", string(content), tt.expected)
@@ -687,7 +777,7 @@ func TestApplyDocumentChange(t *testing.T) {
 				mfs.files = map[string][]byte{}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/newfile.txt"]; !ok {
+				if !hasMockContent(mfs, "/test/newfile.txt") {
 					t.Errorf("File was not created")
 				}
 			},
@@ -709,7 +799,7 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if content, ok := mfs.files["/test/existing.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/existing.txt"); !ok {
 					t.Errorf("File was not created")
 				} else if string(content) != "" {
 					t.Errorf("File was not overwritten, content: %s", string(content))
@@ -736,7 +826,7 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if content, ok := mfs.files["/test/existing.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/existing.txt"); !ok {
 					t.Errorf("File was removed")
 				} else if string(content) != "existing content" {
 					t.Errorf("File was modified, content: %s", string(content))
@@ -757,7 +847,7 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/existing.txt"]; ok {
+				if hasMockContent(mfs, "/test/existing.txt") {
 					t.Errorf("File was not deleted")
 				}
 			},
@@ -782,16 +872,16 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/dir/file1.txt"]; ok {
+				if hasMockContent(mfs, "/test/dir/file1.txt") {
 					t.Errorf("File in directory was not deleted")
 				}
-				if _, ok := mfs.files["/test/dir/file2.txt"]; ok {
+				if hasMockContent(mfs, "/test/dir/file2.txt") {
 					t.Errorf("File in directory was not deleted")
 				}
-				if _, ok := mfs.files["/test/dir/subdir/file3.txt"]; ok {
+				if hasMockContent(mfs, "/test/dir/subdir/file3.txt") {
 					t.Errorf("File in subdirectory was not deleted")
 				}
-				if _, ok := mfs.files["/test/other.txt"]; !ok {
+				if !hasMockContent(mfs, "/test/other.txt") {
 					t.Errorf("File outside target directory was deleted")
 				}
 			},
@@ -811,10 +901,10 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/oldname.txt"]; ok {
+				if hasMockContent(mfs, "/test/oldname.txt") {
 					t.Errorf("Old file still exists")
 				}
-				if content, ok := mfs.files["/test/newname.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/newname.txt"); !ok {
 					t.Errorf("New file was not created")
 				} else if string(content) != "file content" {
 					t.Errorf("New file has incorrect content: %s", string(content))
@@ -843,10 +933,10 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/oldname.txt"]; !ok {
+				if !hasMockContent(mfs, "/test/oldname.txt") {
 					t.Errorf("Old file was removed despite rename failure")
 				}
-				if content, ok := mfs.files["/test/existing.txt"]; !ok || string(content) != "existing content" {
+				if content, ok := findMockContent(mfs, "/test/existing.txt"); !ok || string(content) != "existing content" {
 					t.Errorf("Existing file was modified despite no overwrite")
 				}
 			},
@@ -880,7 +970,7 @@ func TestApplyDocumentChange(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if content, ok := mfs.files["/test/document.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/document.txt"); !ok {
 					t.Errorf("File not found")
 				} else if string(content) != "This was test line" {
 					t.Errorf("Text edit not applied correctly, content: %s", string(content))
@@ -920,6 +1010,36 @@ func TestApplyWorkspaceEdit(t *testing.T) {
 		checkState func(*testing.T, *mockFileSystem)
 	}{
 		{
+			name: "Windows URI with spaces via Changes field",
+			edit: protocol.WorkspaceEdit{
+				Changes: map[protocol.DocumentUri][]protocol.TextEdit{
+					"file:///C:/Users/pedro/Downloads/Projeto%20Teste/Unit1.pas": {
+						{
+							Range: protocol.Range{
+								Start: protocol.Position{Line: 0, Character: 11},
+								End:   protocol.Position{Line: 0, Character: 11},
+							},
+							NewText: "\ninterface",
+						},
+					},
+				},
+			},
+			expectErr: false,
+			setupMocks: func(mfs *mockFileSystem) {
+				mfs.files = map[string][]byte{
+					filepath.FromSlash("C:/Users/pedro/Downloads/Projeto Teste/Unit1.pas"): []byte("unit Unit1;"),
+				}
+			},
+			checkState: func(t *testing.T, mfs *mockFileSystem) {
+				path := filepath.FromSlash("C:/Users/pedro/Downloads/Projeto Teste/Unit1.pas")
+				if content, ok := mfs.files[path]; !ok {
+					t.Errorf("File not found")
+				} else if string(content) != "unit Unit1;\ninterface" {
+					t.Errorf("Edit not applied correctly, content: %s", string(content))
+				}
+			},
+		},
+		{
 			name: "Text edits via Changes field",
 			edit: protocol.WorkspaceEdit{
 				Changes: map[protocol.DocumentUri][]protocol.TextEdit{
@@ -951,13 +1071,13 @@ func TestApplyWorkspaceEdit(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if content, ok := mfs.files["/test/file1.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/file1.txt"); !ok {
 					t.Errorf("File1 not found")
 				} else if string(content) != "This was test line" {
 					t.Errorf("Edit to file1 not applied correctly, content: %s", string(content))
 				}
 
-				if content, ok := mfs.files["/test/file2.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/file2.txt"); !ok {
 					t.Errorf("File2 not found")
 				} else if string(content) != "Line 1\nModified\nLine 3" {
 					t.Errorf("Edit to file2 not applied correctly, content: %s", string(content))
@@ -1009,19 +1129,19 @@ func TestApplyWorkspaceEdit(t *testing.T) {
 				}
 			},
 			checkState: func(t *testing.T, mfs *mockFileSystem) {
-				if _, ok := mfs.files["/test/newfile.txt"]; !ok {
+				if !hasMockContent(mfs, "/test/newfile.txt") {
 					t.Errorf("New file was not created")
 				}
 
-				if _, ok := mfs.files["/test/oldname.txt"]; ok {
+				if hasMockContent(mfs, "/test/oldname.txt") {
 					t.Errorf("Old file still exists")
 				}
 
-				if _, ok := mfs.files["/test/newname.txt"]; !ok {
+				if !hasMockContent(mfs, "/test/newname.txt") {
 					t.Errorf("Renamed file not found")
 				}
 
-				if content, ok := mfs.files["/test/document.txt"]; !ok {
+				if content, ok := findMockContent(mfs, "/test/document.txt"); !ok {
 					t.Errorf("Document not found")
 				} else if string(content) != "This was test line" {
 					t.Errorf("Text edit not applied correctly, content: %s", string(content))
