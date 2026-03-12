@@ -91,10 +91,8 @@ func NewClient(command string, args ...string) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) SynchronizeConfig(ctx context.Context, workspaceDir string) error {
-	return c.SetConfig(ctx, map[string]any{
-		"workspacePaths": workspaceDir,
-	})
+func (c *Client) SynchronizeConfig(ctx context.Context, config map[string]any) error {
+	return c.SetConfig(ctx, config)
 }
 
 func (c *Client) SetConfig(ctx context.Context, config map[string]any) error {

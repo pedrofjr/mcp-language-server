@@ -156,6 +156,41 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
   </div>
 </details>
 <details>
+  <summary>OmniPascal (Delphi / Free Pascal)</summary>
+  <div>
+    <p><strong>Install OmniPascal</strong>: Point the MCP server at your <code>OmniPascalServer.exe</code> binary.</p>
+    <p><strong>Configure your MCP client</strong>: For Delphi projects, pass <code>--backend omnipascal</code> and the startup configuration flags your workspace needs. For Claude Desktop on Windows that can look like this:</p>
+
+<pre>
+{
+  "mcpServers": {
+    "language-server": {
+      "command": "C:\\path\\to\\mcp-language-server.exe",
+      "args": [
+        "--workspace",
+        "C:\\path\\to\\project",
+        "--backend",
+        "omnipascal",
+        "--lsp",
+        "C:\\path\\to\\OmniPascalServer.exe",
+        "--omnipascal-delphi-installation-path",
+        "C:\\Program Files (x86)\\Borland\\Delphi6"
+      ]
+    }
+  }
+}
+</pre>
+
+    <p><strong>Optional OmniPascal startup flags</strong>:</p>
+    <ul>
+      <li><code>--omnipascal-search-path</code> for additional semicolon-separated unit paths.</li>
+      <li><code>--omnipascal-free-pascal-source-path</code> for Free Pascal workspaces.</li>
+      <li><code>--omnipascal-default-development-environment</code> to force Delphi or FreePascal.</li>
+      <li><code>--omnipascal-config-json</code> for any other OmniPascal settings as a raw JSON object.</li>
+    </ul>
+  </div>
+</details>
+<details>
   <summary>Other</summary>
   <div>
     <p>I have only tested this repo with the servers above but it should be compatible with many more. Note:</p>

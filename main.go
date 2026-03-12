@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -27,6 +28,12 @@ type config struct {
 	lspCommand   string
 	lspArgs      []string
 	backend      string
+
+	omnipascalConfigJSON                    string
+	omnipascalDelphiInstallationPath        string
+	omnipascalFreePascalSourcePath          string
+	omnipascalDefaultDevelopmentEnvironment string
+	omnipascalSearchPath                    string
 }
 
 type mcpServer struct {
@@ -44,6 +51,11 @@ func parseConfig() (*config, error) {
 	flag.StringVar(&cfg.workspaceDir, "workspace", "", "Path to workspace directory")
 	flag.StringVar(&cfg.lspCommand, "lsp", "", "LSP command to run (args should be passed after --)")
 	flag.StringVar(&cfg.backend, "backend", "auto", "Backend protocol to use: auto, lsp, or omnipascal")
+	flag.StringVar(&cfg.omnipascalConfigJSON, "omnipascal-config-json", "", "Raw JSON object with OmniPascal configuration values applied during startup")
+	flag.StringVar(&cfg.omnipascalDelphiInstallationPath, "omnipascal-delphi-installation-path", "", "Path to the Delphi installation used by OmniPascal")
+	flag.StringVar(&cfg.omnipascalFreePascalSourcePath, "omnipascal-free-pascal-source-path", "", "Path to the Free Pascal sources used by OmniPascal")
+	flag.StringVar(&cfg.omnipascalDefaultDevelopmentEnvironment, "omnipascal-default-development-environment", "", "Default OmniPascal development environment, for example Delphi or FreePascal")
+	flag.StringVar(&cfg.omnipascalSearchPath, "omnipascal-search-path", "", "Semicolon-separated OmniPascal search path entries applied during startup")
 	flag.Parse()
 
 	// Get remaining args after -- as LSP arguments
@@ -97,6 +109,40 @@ func resolveBackend(mode, command string) (string, error) {
 	}
 }
 
+func (cfg config) initialOmniPascalConfig() (map[string]any, error) {
+	result := map[string]any{}
+
+	if cfg.omnipascalConfigJSON != "" {
+		if err := json.Unmarshal([]byte(cfg.omnipascalConfigJSON), &result); err != nil {
+			return nil, fmt.Errorf("omnipascal-config-json must be a valid JSON object: %w", err)
+		}
+	}
+
+	result["workspacePaths"] = cfg.workspaceDir
+	setOmniPascalStringConfig(result, "delphiInstallationPath", cfg.omnipascalDelphiInstallationPath)
+	setOmniPascalStringConfig(result, "freePascalSourcePath", cfg.omnipascalFreePascalSourcePath)
+	setOmniPascalStringConfig(result, "searchPath", cfg.omnipascalSearchPath)
+
+	if cfg.omnipascalDefaultDevelopmentEnvironment != "" {
+		result["defaultDevelopmentEnvironment"] = cfg.omnipascalDefaultDevelopmentEnvironment
+	} else if _, exists := result["defaultDevelopmentEnvironment"]; !exists {
+		switch {
+		case cfg.omnipascalDelphiInstallationPath != "":
+			result["defaultDevelopmentEnvironment"] = "Delphi"
+		case cfg.omnipascalFreePascalSourcePath != "":
+			result["defaultDevelopmentEnvironment"] = "FreePascal"
+		}
+	}
+
+	return result, nil
+}
+
+func setOmniPascalStringConfig(config map[string]any, key, value string) {
+	if value != "" {
+		config[key] = value
+	}
+}
+
 func newServer(config *config) (*mcpServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &mcpServer{
@@ -144,7 +190,12 @@ func (s *mcpServer) initializeOmniPascal() error {
 	}
 	s.omniClient = client
 
-	if err := client.SynchronizeConfig(s.ctx, s.config.workspaceDir); err != nil {
+	initialConfig, err := s.config.initialOmniPascalConfig()
+	if err != nil {
+		return err
+	}
+
+	if err := client.SynchronizeConfig(s.ctx, initialConfig); err != nil {
 		return fmt.Errorf("failed to synchronize OmniPascal config: %v", err)
 	}
 
