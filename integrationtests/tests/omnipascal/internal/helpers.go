@@ -177,19 +177,30 @@ func findReferencePosition(filePath string) (int, int, error) {
 		_ = f.Close()
 	}()
 
+	lines := make([]string, 0, 256)
 	scanner := bufio.NewScanner(f)
-	lineNo := 0
 	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
-		for i, r := range line {
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_' {
-				return lineNo, i + 1, nil
-			}
-		}
+		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
 		return 0, 0, err
 	}
+
+	for _, token := range []string{"FiltrarTabela", "Button1Click", "TForm1", "SysUtils"} {
+		for lineIndex, line := range lines {
+			if col := strings.Index(line, token); col >= 0 {
+				return lineIndex + 1, col + 1, nil
+			}
+		}
+	}
+
+	for lineIndex, line := range lines {
+		for i, r := range line {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_' {
+				return lineIndex + 1, i + 1, nil
+			}
+		}
+	}
+
 	return 1, 1, nil
 }

@@ -52,7 +52,7 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			Offset:       column,
 			EndLine:      line,
 			EndOffset:    column,
-			InsertString: "",
+			InsertString: "x",
 		}); err != nil {
 			t.Fatalf("change failed: %v", err)
 		}
@@ -134,12 +134,81 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			t.Fatalf("failed to fetch diagnostics after restore: %v", err)
 		}
 
+		// OmniPascal may only emit diagnostics after an in-memory buffer event.
+		if strings.Contains(restoredResult, "No diagnostics.") {
+			if _, changeErr := tools.OmniPascalOpenFile(ctx, suite.Client, filePath); changeErr != nil {
+				t.Fatalf("failed to open file during diagnostics convergence: %v", changeErr)
+			}
+			if _, changeErr := tools.OmniPascalChangeFile(ctx, suite.Client, omnipascal.ChangeArgs{
+				File:         filePath,
+				Line:         1,
+				Offset:       1,
+				EndLine:      1,
+				EndOffset:    2,
+				InsertString: "u",
+			}); changeErr != nil {
+				t.Fatalf("failed to trigger in-memory diagnostics refresh: %v", changeErr)
+			}
+			restoredResult, err = tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 300, 5000)
+			if err != nil {
+				t.Fatalf("failed to fetch diagnostics after in-memory refresh: %v", err)
+			}
+		}
+
 		if strings.Contains(restoredResult, "INVALID_PASCAL_SYNTAX_ERROR_XYZ") {
 			t.Fatalf("restored diagnostics still reference injected syntax marker:\n%s", restoredResult)
 		}
 
 		if !baselineHasLine1 && strings.Contains(restoredResult, "L1:") {
 			t.Fatalf("restored diagnostics still contain line 1 errors introduced by test edit\n--- baseline ---\n%s\n--- restored ---\n%s", baselineResult, restoredResult)
+		}
+	})
+
+	t.Run("geterr_after_buffer_disk_resync", func(t *testing.T) {
+		originalContent, err := os.ReadFile(filePath)
+		if err != nil {
+			t.Fatalf("failed to read target file: %v", err)
+		}
+		originalFirstLine := strings.TrimSuffix(strings.Split(string(originalContent), "\n")[0], "\r")
+
+		if _, err := tools.OmniPascalOpenFile(ctx, suite.Client, filePath); err != nil {
+			t.Fatalf("open before in-memory change failed: %v", err)
+		}
+
+		if _, err := tools.OmniPascalChangeFile(ctx, suite.Client, omnipascal.ChangeArgs{
+			File:         filePath,
+			Line:         1,
+			Offset:       1,
+			EndLine:      1,
+			EndOffset:    2,
+			InsertString: "x",
+		}); err != nil {
+			t.Fatalf("in-memory change failed: %v", err)
+		}
+
+		dirtyResult, err := tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 300, 5000)
+		if err != nil {
+			t.Fatalf("geterr after in-memory change failed: %v", err)
+		}
+		if !strings.Contains(dirtyResult, "ERROR") {
+			t.Fatalf("expected diagnostics after in-memory change, got:\n%s", dirtyResult)
+		}
+
+		if _, err := tools.OmniPascalApplyTextEdits(ctx, suite.Client, filePath, []tools.TextEdit{{
+			StartLine: 1,
+			EndLine:   1,
+			NewText:   originalFirstLine,
+		}}); err != nil {
+			t.Fatalf("failed to restore first line on disk: %v", err)
+		}
+
+		restoredResult, err := tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 300, 7000)
+		if err != nil {
+			t.Fatalf("geterr after disk restore failed: %v", err)
+		}
+
+		if strings.Contains(restoredResult, "L1:") {
+			t.Fatalf("diagnostics remained stale after disk restore\n--- dirty ---\n%s\n--- restored ---\n%s", dirtyResult, restoredResult)
 		}
 	})
 
@@ -160,7 +229,7 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			return tools.OmniPascalDefinition(opCtx, suite.Client, filePath, candidate.Line, candidate.Column)
 		})
 		if err != nil {
-			t.Skipf("definition unavailable in sampled positions: %v", err)
+			t.Skipf("definition unavailable in sampled positions (non-blocking semantic variability): %v", err)
 		}
 		if strings.TrimSpace(result) == "" {
 			t.Fatalf("definition returned empty output")
@@ -174,7 +243,7 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			return tools.OmniPascalQuickInfo(opCtx, suite.Client, filePath, candidate.Line, candidate.Column)
 		})
 		if err != nil {
-			t.Skipf("quickinfo unavailable in sampled positions: %v", err)
+			t.Skipf("quickinfo unavailable in sampled positions (non-blocking semantic variability): %v", err)
 		}
 		if strings.TrimSpace(result) == "" {
 			t.Fatalf("quickinfo returned empty output")
@@ -388,6 +457,8 @@ type lineColumn struct {
 func buildPositionCandidates(filePath string, defaultLine, defaultColumn int) []lineColumn {
 	// Stable fallbacks for known Delphi symbols in typical forms units.
 	candidates := []lineColumn{
+		{Line: 168, Column: 1},
+		{Line: 168, Column: 14},
 		{Line: 15, Column: 20},
 		{Line: 7, Column: 30},
 		{Line: defaultLine, Column: defaultColumn},
@@ -398,11 +469,15 @@ func buildPositionCandidates(filePath string, defaultLine, defaultColumn int) []
 		return candidates
 	}
 
-	for _, token := range []string{"SysUtils", "TForm", "class"} {
+	for _, token := range []string{"FiltrarTabela", "Button1Click", "SysUtils", "TForm", "class"} {
 		if line, column, ok := findTokenPosition(string(content), token); ok {
 			candidates = append(candidates, lineColumn{Line: line, Column: column})
 		}
 	}
+
+	// Broaden semantic probing: collect identifier starts across the file so
+	// definition/quickinfo can find at least one resolvable symbol.
+	candidates = append(candidates, findIdentifierPositions(string(content), 200)...)
 
 	// Deduplicate preserving order.
 	seen := map[string]struct{}{}
@@ -428,6 +503,50 @@ func findTokenPosition(content, token string) (int, int, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+func findIdentifierPositions(content string, limit int) []lineColumn {
+	if limit <= 0 {
+		return nil
+	}
+
+	positions := make([]lineColumn, 0, limit)
+	lines := strings.Split(content, "\n")
+
+	for lineIndex, line := range lines {
+		inIdent := false
+		identStart := 0
+
+		for i, r := range line {
+			isIdent := (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
+
+			if isIdent && !inIdent {
+				inIdent = true
+				identStart = i
+			}
+
+			if !isIdent && inIdent {
+				if i-identStart >= 2 {
+					positions = append(positions, lineColumn{Line: lineIndex + 1, Column: identStart + 1})
+					if len(positions) >= limit {
+						return positions
+					}
+				}
+				inIdent = false
+			}
+		}
+
+		if inIdent {
+			if len(line)-identStart >= 2 {
+				positions = append(positions, lineColumn{Line: lineIndex + 1, Column: identStart + 1})
+				if len(positions) >= limit {
+					return positions
+				}
+			}
+		}
+	}
+
+	return positions
 }
 
 func firstSuccessfulPosition(candidates []lineColumn, run func(candidate lineColumn) (string, error)) (string, error) {

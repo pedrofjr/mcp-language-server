@@ -48,7 +48,8 @@ func TestOmniPascalMCPSurfaceTools(t *testing.T) {
 
 	cmdDir := filepath.Dir(mcpBinary)
 	client, err := newMCPStdioClient(cmdDir, mcpBinary, args...)
-	if err != nil && isPermissionLikeError(err) {
+	allowGoRunFallback := strings.EqualFold(strings.TrimSpace(os.Getenv("OMNIPASCAL_ALLOW_GO_RUN_FALLBACK")), "1")
+	if err != nil && isPermissionLikeError(err) && allowGoRunFallback {
 		t.Logf("mcp binary execution denied, trying go run fallback: %v", err)
 		fallbackArgs := append([]string{"run", "."}, args...)
 		client, err = newMCPStdioClient(cmdDir, "go", fallbackArgs...)
