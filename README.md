@@ -256,13 +256,19 @@ On Windows, build the executable with the `.exe` suffix so MCP clients and subpr
 go build -o mcp-language-server.exe
 ```
 
+> **Note**: Windows may block locally compiled or downloaded executables with an "Access Denied" (Acesso negado) error due to Zone Identifiers (SmartScreen). If your MCP client fails to start the server with this error, you must unblock the executable:
+> 
+> ```powershell
+> Unblock-File -Path "mcp-language-server.exe"
+> ```
+
 If you use `just`, the repository now includes a Windows-specific recipe:
 
 ```powershell
 just build-win
 ```
 
-The resulting binary will be `mcp-language-server.exe` in the repository root.
+The resulting binary will be `mcp-language-server.exe` in the repository root. Remember to unblock it if necessary.
 
 Configure your Claude Desktop (or similar) to use the local binary:
 
