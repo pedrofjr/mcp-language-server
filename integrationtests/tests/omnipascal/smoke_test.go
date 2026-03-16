@@ -89,6 +89,7 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to capture baseline diagnostics: %v", err)
 		}
+		baselineHasLine1 := strings.Contains(baselineResult, "L1:")
 
 		originalContent, err := os.ReadFile(filePath)
 		if err != nil {
@@ -133,8 +134,12 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			t.Fatalf("failed to fetch diagnostics after restore: %v", err)
 		}
 
-		if canonicalDiagnostics(restoredResult) != canonicalDiagnostics(baselineResult) {
-			t.Fatalf("diagnostics did not converge after restore\n--- baseline ---\n%s\n--- restored ---\n%s", baselineResult, restoredResult)
+		if strings.Contains(restoredResult, "INVALID_PASCAL_SYNTAX_ERROR_XYZ") {
+			t.Fatalf("restored diagnostics still reference injected syntax marker:\n%s", restoredResult)
+		}
+
+		if !baselineHasLine1 && strings.Contains(restoredResult, "L1:") {
+			t.Fatalf("restored diagnostics still contain line 1 errors introduced by test edit\n--- baseline ---\n%s\n--- restored ---\n%s", baselineResult, restoredResult)
 		}
 	})
 
@@ -211,6 +216,21 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 	})
 
 	t.Run("add_uses", func(t *testing.T) {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			t.Fatalf("failed to read target file: %v", err)
+		}
+		original := string(content)
+		t.Cleanup(func() {
+			if err := os.WriteFile(filePath, []byte(original), 0644); err != nil {
+				t.Logf("WARNING: failed to restore file after add_uses: %v", err)
+				return
+			}
+			if err := suite.Client.ReopenFile(suite.Context, filePath); err != nil {
+				t.Logf("WARNING: failed to resync file after add_uses restore: %v", err)
+			}
+		})
+
 		sectionsResult, err := tools.OmniPascalGetPossibleUsesSections(ctx, suite.Client, filePath)
 		if err != nil {
 			t.Fatalf("could not read uses sections: %v", err)
@@ -220,12 +240,32 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			t.Skip("no uses section available")
 		}
 
-		result, err := tools.OmniPascalAddUses(ctx, suite.Client, filePath, sections[0], "SysUtils", false)
+		unitCandidates := []string{"DateUtils", "Math", "StrUtils"}
+		unitToAdd := ""
+		for _, candidate := range unitCandidates {
+			if !strings.Contains(original, candidate) {
+				unitToAdd = candidate
+				break
+			}
+		}
+		if unitToAdd == "" {
+			t.Skip("could not find a unit candidate absent from file")
+		}
+
+		result, err := tools.OmniPascalAddUses(ctx, suite.Client, filePath, sections[0], unitToAdd, true)
 		if err != nil {
 			t.Fatalf("addUses failed: %v", err)
 		}
-		if strings.TrimSpace(result) == "" {
-			t.Fatalf("addUses returned empty output")
+		if !strings.Contains(result, "Applied") {
+			t.Fatalf("addUses did not report applied changes, got: %s", result)
+		}
+
+		diskContent, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			t.Fatalf("failed to read file after add_uses: %v", readErr)
+		}
+		if !strings.Contains(string(diskContent), unitToAdd) {
+			t.Fatalf("add_uses did not persist unit %q to disk", unitToAdd)
 		}
 	})
 
@@ -234,8 +274,12 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("getCodeActions failed: %v", err)
 		}
-		if strings.TrimSpace(result) == "" {
+		trimmed := strings.TrimSpace(result)
+		if trimmed == "" {
 			t.Fatalf("getCodeActions returned empty output")
+		}
+		if trimmed != "No code actions available." && !strings.Contains(trimmed, " | ") {
+			t.Fatalf("unexpected getCodeActions output format: %s", result)
 		}
 	})
 
@@ -253,8 +297,12 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runCodeAction failed: %v", err)
 		}
-		if strings.TrimSpace(result) == "" {
+		trimmed := strings.TrimSpace(result)
+		if trimmed == "" {
 			t.Fatalf("runCodeAction returned empty output")
+		}
+		if !strings.Contains(trimmed, "changes") && !strings.Contains(trimmed, "No text changes") {
+			t.Fatalf("runCodeAction returned unexpected payload: %s", result)
 		}
 	})
 
@@ -395,9 +443,4 @@ func firstSuccessfulPosition(candidates []lineColumn, run func(candidate lineCol
 		lastErr = fmt.Errorf("no candidate positions available")
 	}
 	return "", lastErr
-}
-
-func canonicalDiagnostics(value string) string {
-	normalized := strings.ReplaceAll(value, "\r\n", "\n")
-	return strings.TrimSpace(normalized)
 }

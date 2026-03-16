@@ -9,5 +9,11 @@ set "OMNIPASCAL_DELPHI_PATH=C:\Programas\Borland\Delphi6"
 set "OMNIPASCAL_SEARCH_PATH=C:\GIT\*"
 set "OMNIPASCAL_MCP_BINARY=%~dp0mcp-language-server.exe"
 
+if not exist "%OMNIPASCAL_MCP_BINARY%" (
+	echo Building MCP binary: %OMNIPASCAL_MCP_BINARY%
+	go build -o "%OMNIPASCAL_MCP_BINARY%" .
+	if errorlevel 1 exit /b %ERRORLEVEL%
+)
+
 go test ./integrationtests/tests/omnipascal -run "TestOmniPascalSmokeTools|TestOmniPascalMCPSurfaceTools" -v -count=1
 exit /b %ERRORLEVEL%
