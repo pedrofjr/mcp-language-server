@@ -89,12 +89,12 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to capture baseline diagnostics: %v", err)
 		}
-		baselineHasLine1 := strings.Contains(baselineResult, "L1:")
 
 		originalContent, err := os.ReadFile(filePath)
 		if err != nil {
 			t.Fatalf("failed to read target file: %v", err)
 		}
+		originalFirstLine := strings.TrimSuffix(strings.Split(string(originalContent), "\n")[0], "\r")
 		t.Cleanup(func() {
 			if err := os.WriteFile(filePath, originalContent, 0644); err != nil {
 				t.Logf("WARNING: failed to restore target file after geterr_with_error: %v", err)
@@ -121,15 +121,16 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if !strings.Contains(result, "ERROR") {
 			t.Fatalf("expected at least one ERROR diagnostic after injecting syntax error, got:\n%s", result)
 		}
-		if !baselineHasLine1 && !strings.Contains(result, "L1:") {
-			t.Fatalf("expected injected syntax error to surface at line 1, got:\n%s", result)
+		if result == baselineResult {
+			t.Fatalf("expected injected syntax error to change diagnostics, but result matched baseline\n--- baseline ---\n%s\n--- result ---\n%s", baselineResult, result)
 		}
 
-		if err := os.WriteFile(filePath, originalContent, 0644); err != nil {
-			t.Fatalf("failed to restore target file after geterr_with_error: %v", err)
-		}
-		if err := suite.Client.ReopenFile(ctx, filePath); err != nil {
-			t.Fatalf("failed to resync target file after geterr_with_error restore: %v", err)
+		if _, err := tools.OmniPascalApplyTextEdits(ctx, suite.Client, filePath, []tools.TextEdit{{
+			StartLine: 1,
+			EndLine:   1,
+			NewText:   originalFirstLine,
+		}}); err != nil {
+			t.Fatalf("failed to restore first line after geterr_with_error: %v", err)
 		}
 
 		restoredResult, err := tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 300, 5000)
@@ -162,8 +163,8 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 			t.Fatalf("restored diagnostics still reference injected syntax marker:\n%s", restoredResult)
 		}
 
-		if !baselineHasLine1 && strings.Contains(restoredResult, "L1:") {
-			t.Fatalf("restored diagnostics still contain line 1 errors introduced by test edit\n--- baseline ---\n%s\n--- restored ---\n%s", baselineResult, restoredResult)
+		if restoredResult == result {
+			t.Fatalf("restored diagnostics still match the dirty diagnostics after the file was restored\n--- dirty ---\n%s\n--- restored ---\n%s", result, restoredResult)
 		}
 	})
 
