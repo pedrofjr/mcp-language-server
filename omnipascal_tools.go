@@ -62,6 +62,9 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		return mcp.NewToolResultText(response), nil
 	})
 
+	// omnipascal_set_config: desabilitado — setConfig é executado automaticamente no init.
+	// Para reativar, descomente o bloco abaixo.
+	/*
 	setConfigTool := mcp.NewTool("omnipascal_set_config",
 		mcp.WithDescription("Execute the OmniPascal setConfig command. Use configJson for arbitrary settings or provide the common Delphi settings directly."),
 		mcp.WithString("configJson", mcp.Description("Optional raw JSON object with OmniPascal configuration values.")),
@@ -91,7 +94,10 @@ func (s *mcpServer) registerOmniPascalTools() error {
 
 		return mcp.NewToolResultText(response), nil
 	})
+	*/
 
+	// omnipascal_open / omnipascal_close: desabilitados — buffer sync gerenciado internamente.
+	/*
 	openTool := mcp.NewTool("omnipascal_open",
 		mcp.WithDescription("Execute the OmniPascal open command for a file."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute or workspace-relative file path.")),
@@ -127,7 +133,10 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		}
 		return mcp.NewToolResultText(response), nil
 	})
+	*/
 
+	// omnipascal_change: desabilitado — buffer sync gerenciado internamente.
+	/*
 	changeTool := mcp.NewTool("omnipascal_change",
 		mcp.WithDescription("Execute the OmniPascal change command. The insertString is plain text and will be encoded before sending."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("File path to update.")),
@@ -177,6 +186,7 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		}
 		return mcp.NewToolResultText(response), nil
 	})
+	*/
 
 	getErrTool := mcp.NewTool("omnipascal_geterr",
 		mcp.WithDescription("Execute the OmniPascal geterr command and return the latest cached diagnostics for the requested files."),
@@ -248,6 +258,9 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		return tools.OmniPascalSignatureHelp(s.ctx, s.omniClient, filePath, line, column)
 	})
 
+	// omnipascal_document_symbol / omnipascal_workspace_symbol / omnipascal_get_project_files:
+	// desabilitados — outline, busca global e helper de UI fora do escopo atual.
+	/*
 	documentSymbolTool := mcp.NewTool("omnipascal_document_symbol",
 		mcp.WithDescription("Execute the OmniPascal textDocument/documentSymbol command."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("File path.")),
@@ -295,6 +308,7 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		}
 		return mcp.NewToolResultText(response), nil
 	})
+	*/
 
 	loadProjectTool := mcp.NewTool("omnipascal_load_project",
 		mcp.WithDescription("Execute the OmniPascal loadProject command."),
