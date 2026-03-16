@@ -318,3 +318,25 @@ integrationtests/
 ```
 
 To update snapshots, run `UPDATE_SNAPSHOTS=true go test ./integrationtests/...`
+
+### OmniPascal Smoke Tests
+
+The repository now includes an OmniPascal smoke suite under `integrationtests/tests/omnipascal`.
+This suite is integration-focused and can run against a real Delphi workspace.
+
+Required environment variables:
+
+- `OMNIPASCAL_SERVER`: Absolute path to `OmniPascalServer.exe`.
+
+Optional environment variables:
+
+- `OMNIPASCAL_WORKSPACE`: Workspace root to test (defaults to `C:\Users\pedro.ailton\Downloads\SelecaoTimCFOPLote`).
+- `OMNIPASCAL_TARGET_FILE`: Target `.pas` file (absolute or workspace-relative).
+- `OMNIPASCAL_PROJECT_FILE`: Project file (absolute or workspace-relative).
+- `OMNIPASCAL_DELPHI_PATH`: Value used for `delphiInstallationPath` during `setConfig`.
+- `OMNIPASCAL_SEARCH_PATH`: Value used for `searchPath` during `setConfig`.
+- `OMNIPASCAL_DEFAULT_ENV`: Value used for `defaultDevelopmentEnvironment`.
+
+Run only the OmniPascal smoke suite:
+
+`just test-omnipascal`

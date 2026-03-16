@@ -274,29 +274,31 @@ func (c *Client) Close() error {
 		}
 	}
 
-	forcedKill := make(chan struct{})
-	go func() {
-		select {
-		case <-time.After(2 * time.Second):
-			omniLogger.Warn("OmniPascal process did not exit within timeout, forcing kill")
-			if c.Cmd.Process != nil {
-				if err := c.Cmd.Process.Kill(); err != nil {
-					omniLogger.Error("failed to kill OmniPascal process: %v", err)
-				}
-			}
-			close(forcedKill)
-		case <-forcedKill:
-			return
-		}
-	}()
-
 	if err := c.stdin.Close(); err != nil {
 		omniLogger.Error("failed to close OmniPascal stdin: %v", err)
 	}
 
-	err := c.Cmd.Wait()
-	close(forcedKill)
-	return err
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- c.Cmd.Wait()
+	}()
+
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case err := <-waitDone:
+		return err
+	case <-timer.C:
+		omniLogger.Warn("OmniPascal process did not exit within timeout, forcing kill")
+		if c.Cmd.Process != nil {
+			if err := c.Cmd.Process.Kill(); err != nil {
+				omniLogger.Error("failed to kill OmniPascal process: %v", err)
+				return err
+			}
+		}
+		return <-waitDone
+	}
 }
 
 func (c *Client) handleMessages() {

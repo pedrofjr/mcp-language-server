@@ -96,10 +96,9 @@ func (s *mcpServer) registerOmniPascalTools() error {
 	})
 	*/
 
-	// omnipascal_open / omnipascal_close: desabilitados — buffer sync gerenciado internamente.
-	/*
+	// omnipascal_open / omnipascal_close / omnipascal_change: buffer sync para validação de código sujo
 	openTool := mcp.NewTool("omnipascal_open",
-		mcp.WithDescription("Execute the OmniPascal open command for a file."),
+		mcp.WithDescription("Execute the OmniPascal open command for a file. Required before sending changes to memory."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute or workspace-relative file path.")),
 	)
 
@@ -117,7 +116,7 @@ func (s *mcpServer) registerOmniPascalTools() error {
 	})
 
 	closeTool := mcp.NewTool("omnipascal_close",
-		mcp.WithDescription("Execute the OmniPascal close command for a file."),
+		mcp.WithDescription("Execute the OmniPascal close command for a file. Required after sending changes to memory."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute or workspace-relative file path.")),
 	)
 
@@ -133,10 +132,7 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		}
 		return mcp.NewToolResultText(response), nil
 	})
-	*/
 
-	// omnipascal_change: desabilitado — buffer sync gerenciado internamente.
-	/*
 	changeTool := mcp.NewTool("omnipascal_change",
 		mcp.WithDescription("Execute the OmniPascal change command. The insertString is plain text and will be encoded before sending."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("File path to update.")),
@@ -186,7 +182,6 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		}
 		return mcp.NewToolResultText(response), nil
 	})
-	*/
 
 	getErrTool := mcp.NewTool("omnipascal_geterr",
 		mcp.WithDescription("Execute the OmniPascal geterr command and return the latest cached diagnostics for the requested files."),

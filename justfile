@@ -37,6 +37,10 @@ check:
 test:
   go test ./...
 
+# Run OmniPascal smoke integration tests only
+test-omnipascal:
+  go test ./integrationtests/tests/omnipascal/... -v -timeout 10m
+
 # Update snapshot tests
 snapshot:
   UPDATE_SNAPSHOTS=true go test ./integrationtests/...
