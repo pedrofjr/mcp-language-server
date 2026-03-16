@@ -65,35 +65,35 @@ func (s *mcpServer) registerOmniPascalTools() error {
 	// omnipascal_set_config: desabilitado — setConfig é executado automaticamente no init.
 	// Para reativar, descomente o bloco abaixo.
 	/*
-	setConfigTool := mcp.NewTool("omnipascal_set_config",
-		mcp.WithDescription("Execute the OmniPascal setConfig command. Use configJson for arbitrary settings or provide the common Delphi settings directly."),
-		mcp.WithString("configJson", mcp.Description("Optional raw JSON object with OmniPascal configuration values.")),
-		mcp.WithString("workspacePaths", mcp.Description("Semicolon-separated workspace paths.")),
-		mcp.WithString("delphiInstallationPath", mcp.Description("Path to the Delphi installation.")),
-		mcp.WithString("freePascalSourcePath", mcp.Description("Path to the Free Pascal source files.")),
-		mcp.WithString("defaultDevelopmentEnvironment", mcp.Description("Delphi or FreePascal.")),
-		mcp.WithString("searchPath", mcp.Description("Additional search path list separated by semicolons.")),
-		mcp.WithString("msbuildPath", mcp.Description("Full path to MSBuild.exe.")),
-		mcp.WithString("lazbuildPath", mcp.Description("Full path to lazbuild.exe.")),
-		mcp.WithBoolean("createBuildScripts", mcp.Description("Whether OmniPascal should create build scripts.")),
-		mcp.WithString("symbolIndex", mcp.Description("off, workspace, or searchPath.")),
-		mcp.WithString("usesListStyle", mcp.Description("multipleItemsPerLine or oneItemPerLine.")),
-		mcp.WithString("namingConventionString", mcp.Description("pascalCase or camelCase.")),
-	)
+		setConfigTool := mcp.NewTool("omnipascal_set_config",
+			mcp.WithDescription("Execute the OmniPascal setConfig command. Use configJson for arbitrary settings or provide the common Delphi settings directly."),
+			mcp.WithString("configJson", mcp.Description("Optional raw JSON object with OmniPascal configuration values.")),
+			mcp.WithString("workspacePaths", mcp.Description("Semicolon-separated workspace paths.")),
+			mcp.WithString("delphiInstallationPath", mcp.Description("Path to the Delphi installation.")),
+			mcp.WithString("freePascalSourcePath", mcp.Description("Path to the Free Pascal source files.")),
+			mcp.WithString("defaultDevelopmentEnvironment", mcp.Description("Delphi or FreePascal.")),
+			mcp.WithString("searchPath", mcp.Description("Additional search path list separated by semicolons.")),
+			mcp.WithString("msbuildPath", mcp.Description("Full path to MSBuild.exe.")),
+			mcp.WithString("lazbuildPath", mcp.Description("Full path to lazbuild.exe.")),
+			mcp.WithBoolean("createBuildScripts", mcp.Description("Whether OmniPascal should create build scripts.")),
+			mcp.WithString("symbolIndex", mcp.Description("off, workspace, or searchPath.")),
+			mcp.WithString("usesListStyle", mcp.Description("multipleItemsPerLine or oneItemPerLine.")),
+			mcp.WithString("namingConventionString", mcp.Description("pascalCase or camelCase.")),
+		)
 
-	s.mcpServer.AddTool(setConfigTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		config, err := buildOmniPascalConfig(request.Params.Arguments)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
+		s.mcpServer.AddTool(setConfigTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			config, err := buildOmniPascalConfig(request.Params.Arguments)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 
-		response, err := tools.OmniPascalSetConfig(s.ctx, s.omniClient, config)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to synchronize config: %v", err)), nil
-		}
+			response, err := tools.OmniPascalSetConfig(s.ctx, s.omniClient, config)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to synchronize config: %v", err)), nil
+			}
 
-		return mcp.NewToolResultText(response), nil
-	})
+			return mcp.NewToolResultText(response), nil
+		})
 	*/
 
 	// omnipascal_open / omnipascal_close / omnipascal_change: buffer sync para validação de código sujo
@@ -134,13 +134,13 @@ func (s *mcpServer) registerOmniPascalTools() error {
 	})
 
 	changeTool := mcp.NewTool("omnipascal_change",
-		mcp.WithDescription("Execute the OmniPascal change command. The insertString is plain text and will be encoded before sending."),
+		mcp.WithDescription("Execute the OmniPascal change command. The insertString is plain text and will be encoded before sending. It may be empty when applying deletions."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("File path to update.")),
 		mcp.WithNumber("startLine", mcp.Required(), mcp.Description("Start line, one-indexed.")),
 		mcp.WithNumber("startColumn", mcp.Required(), mcp.Description("Start column, one-indexed.")),
 		mcp.WithNumber("endLine", mcp.Required(), mcp.Description("End line, one-indexed.")),
 		mcp.WithNumber("endColumn", mcp.Required(), mcp.Description("End column, one-indexed.")),
-		mcp.WithString("insertString", mcp.Required(), mcp.Description("Replacement content before URI encoding.")),
+		mcp.WithString("insertString", mcp.Required(), mcp.Description("Replacement content before URI encoding. Can be empty for deletions.")),
 	)
 
 	s.mcpServer.AddTool(changeTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -164,7 +164,7 @@ func (s *mcpServer) registerOmniPascalTools() error {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		insertString, err := requireStringArg(request.Params.Arguments, "insertString")
+		insertString, err := requireStringArgAllowEmpty(request.Params.Arguments, "insertString")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -256,53 +256,53 @@ func (s *mcpServer) registerOmniPascalTools() error {
 	// omnipascal_document_symbol / omnipascal_workspace_symbol / omnipascal_get_project_files:
 	// desabilitados — outline, busca global e helper de UI fora do escopo atual.
 	/*
-	documentSymbolTool := mcp.NewTool("omnipascal_document_symbol",
-		mcp.WithDescription("Execute the OmniPascal textDocument/documentSymbol command."),
-		mcp.WithString("filePath", mcp.Required(), mcp.Description("File path.")),
-	)
+		documentSymbolTool := mcp.NewTool("omnipascal_document_symbol",
+			mcp.WithDescription("Execute the OmniPascal textDocument/documentSymbol command."),
+			mcp.WithString("filePath", mcp.Required(), mcp.Description("File path.")),
+		)
 
-	s.mcpServer.AddTool(documentSymbolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		filePath, err := requireStringArg(request.Params.Arguments, "filePath")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		response, err := tools.OmniPascalDocumentSymbols(s.ctx, s.omniClient, filePath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get document symbols: %v", err)), nil
-		}
-		return mcp.NewToolResultText(response), nil
-	})
+		s.mcpServer.AddTool(documentSymbolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath, err := requireStringArg(request.Params.Arguments, "filePath")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			response, err := tools.OmniPascalDocumentSymbols(s.ctx, s.omniClient, filePath)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get document symbols: %v", err)), nil
+			}
+			return mcp.NewToolResultText(response), nil
+		})
 
-	workspaceSymbolTool := mcp.NewTool("omnipascal_workspace_symbol",
-		mcp.WithDescription("Execute the OmniPascal workspace/symbol command."),
-		mcp.WithString("query", mcp.Required(), mcp.Description("Workspace symbol query.")),
-	)
+		workspaceSymbolTool := mcp.NewTool("omnipascal_workspace_symbol",
+			mcp.WithDescription("Execute the OmniPascal workspace/symbol command."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Workspace symbol query.")),
+		)
 
-	s.mcpServer.AddTool(workspaceSymbolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		query, err := requireStringArg(request.Params.Arguments, "query")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		response, err := tools.OmniPascalWorkspaceSymbols(s.ctx, s.omniClient, query)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get workspace symbols: %v", err)), nil
-		}
-		return mcp.NewToolResultText(response), nil
-	})
+		s.mcpServer.AddTool(workspaceSymbolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query, err := requireStringArg(request.Params.Arguments, "query")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			response, err := tools.OmniPascalWorkspaceSymbols(s.ctx, s.omniClient, query)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get workspace symbols: %v", err)), nil
+			}
+			return mcp.NewToolResultText(response), nil
+		})
 
-	getProjectFilesTool := mcp.NewTool("omnipascal_get_project_files",
-		mcp.WithDescription("Execute the OmniPascal getProjectFiles command."),
-		mcp.WithString("filePath", mcp.Description("Optional current file path used by OmniPascal to resolve project context.")),
-	)
+		getProjectFilesTool := mcp.NewTool("omnipascal_get_project_files",
+			mcp.WithDescription("Execute the OmniPascal getProjectFiles command."),
+			mcp.WithString("filePath", mcp.Description("Optional current file path used by OmniPascal to resolve project context.")),
+		)
 
-	s.mcpServer.AddTool(getProjectFilesTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		filePath := stringArgOrEmpty(request.Params.Arguments, "filePath")
-		response, err := tools.OmniPascalGetProjectFiles(s.ctx, s.omniClient, filePath)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get project files: %v", err)), nil
-		}
-		return mcp.NewToolResultText(response), nil
-	})
+		s.mcpServer.AddTool(getProjectFilesTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath := stringArgOrEmpty(request.Params.Arguments, "filePath")
+			response, err := tools.OmniPascalGetProjectFiles(s.ctx, s.omniClient, filePath)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get project files: %v", err)), nil
+			}
+			return mcp.NewToolResultText(response), nil
+		})
 	*/
 
 	loadProjectTool := mcp.NewTool("omnipascal_load_project",
@@ -582,6 +582,20 @@ func requireStringArg(args map[string]any, key string) (string, error) {
 		return "", fmt.Errorf("%s must be a non-empty string", key)
 	}
 	return value, nil
+}
+
+func requireStringArgAllowEmpty(args map[string]any, key string) (string, error) {
+	value, exists := args[key]
+	if !exists {
+		return "", fmt.Errorf("%s is required", key)
+	}
+
+	typed, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+
+	return typed, nil
 }
 
 func stringArgOrEmpty(args map[string]any, key string) string {

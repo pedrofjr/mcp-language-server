@@ -54,3 +54,45 @@ func TestInitialOmniPascalConfigMergesJSONAndFlags(t *testing.T) {
 		t.Fatalf("defaultDevelopmentEnvironment = %v, want %q", got, "Delphi")
 	}
 }
+
+func TestRequireStringArgAllowEmpty(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    map[string]any
+		key     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "allows empty string",
+			args:    map[string]any{"insertString": ""},
+			key:     "insertString",
+			want:    "",
+			wantErr: false,
+		},
+		{
+			name:    "rejects missing key",
+			args:    map[string]any{},
+			key:     "insertString",
+			wantErr: true,
+		},
+		{
+			name:    "rejects non-string value",
+			args:    map[string]any{"insertString": 42},
+			key:     "insertString",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := requireStringArgAllowEmpty(tt.args, tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("requireStringArgAllowEmpty() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Fatalf("requireStringArgAllowEmpty() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -85,6 +85,11 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 	})
 
 	t.Run("geterr_with_error", func(t *testing.T) {
+		baselineResult, err := tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 0, 3000)
+		if err != nil {
+			t.Fatalf("failed to capture baseline diagnostics: %v", err)
+		}
+
 		originalContent, err := os.ReadFile(filePath)
 		if err != nil {
 			t.Fatalf("failed to read target file: %v", err)
@@ -114,6 +119,22 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		}
 		if !strings.Contains(result, "ERROR") {
 			t.Fatalf("expected at least one ERROR diagnostic after injecting syntax error, got:\n%s", result)
+		}
+
+		if err := os.WriteFile(filePath, originalContent, 0644); err != nil {
+			t.Fatalf("failed to restore target file after geterr_with_error: %v", err)
+		}
+		if err := suite.Client.ReopenFile(ctx, filePath); err != nil {
+			t.Fatalf("failed to resync target file after geterr_with_error restore: %v", err)
+		}
+
+		restoredResult, err := tools.OmniPascalGetDiagnostics(ctx, suite.Client, []string{filePath}, 300, 5000)
+		if err != nil {
+			t.Fatalf("failed to fetch diagnostics after restore: %v", err)
+		}
+
+		if canonicalDiagnostics(restoredResult) != canonicalDiagnostics(baselineResult) {
+			t.Fatalf("diagnostics did not converge after restore\n--- baseline ---\n%s\n--- restored ---\n%s", baselineResult, restoredResult)
 		}
 	})
 
@@ -374,4 +395,9 @@ func firstSuccessfulPosition(candidates []lineColumn, run func(candidate lineCol
 		lastErr = fmt.Errorf("no candidate positions available")
 	}
 	return "", lastErr
+}
+
+func canonicalDiagnostics(value string) string {
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.TrimSpace(normalized)
 }

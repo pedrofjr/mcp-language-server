@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +75,7 @@ func NewClient(command string, args ...string) (*Client, error) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start OmniPascal server: %w", err)
+		return nil, newProcessStartError("OmniPascal server", command, err)
 	}
 
 	go func() {
@@ -208,10 +210,17 @@ func (c *Client) CloseFile(ctx context.Context, filePath string) error {
 	delete(c.openFiles, filePath)
 	c.openFilesMu.Unlock()
 
+	// Once a file is closed, cached diagnostics are no longer authoritative
+	// for future reopen/geterr cycles.
+	c.InvalidateFileDiagnostics(filePath)
+
 	return nil
 }
 
 func (c *Client) ReopenFile(ctx context.Context, filePath string) error {
+	// Force subsequent geterr calls to rely on fresh server events.
+	c.InvalidateFileDiagnostics(filePath)
+
 	if err := c.CloseFile(ctx, filePath); err != nil {
 		return err
 	}
@@ -220,6 +229,8 @@ func (c *Client) ReopenFile(ctx context.Context, filePath string) error {
 
 func (c *Client) ChangeFile(ctx context.Context, args ChangeArgs) error {
 	args.File = normalizePath(args.File)
+	// A buffer change can invalidate previous diagnostics immediately.
+	c.InvalidateFileDiagnostics(args.File)
 	return c.Notify(ctx, "change", args)
 }
 
@@ -255,6 +266,15 @@ func (c *Client) GetFileDiagnostics(filePath string) []Diagnostic {
 	result = append(result, syntax...)
 	result = append(result, semantic...)
 	return result
+}
+
+func (c *Client) InvalidateFileDiagnostics(filePath string) {
+	filePath = normalizePath(filePath)
+
+	c.diagnosticsMu.Lock()
+	delete(c.syntaxDiagnostics, filePath)
+	delete(c.semanticDiagnostics, filePath)
+	c.diagnosticsMu.Unlock()
 }
 
 func (c *Client) Close() error {
@@ -442,4 +462,47 @@ func normalizePath(path string) string {
 		path = abs
 	}
 	return filepath.Clean(path)
+}
+
+func newProcessStartError(kind, command string, err error) error {
+	if !isPermissionLikeError(err) {
+		return fmt.Errorf("failed to start %s: %w", kind, err)
+	}
+
+	absCommand := command
+	if resolved, resolveErr := exec.LookPath(command); resolveErr == nil {
+		absCommand = resolved
+	}
+
+	hints := []string{
+		fmt.Sprintf("failed to start %s: %v", kind, err),
+		fmt.Sprintf("executable: %s", absCommand),
+	}
+
+	if runtime.GOOS == "windows" {
+		hints = append(hints,
+			"Windows denied process spawn. If this binary is newly downloaded/compiled, unblock it and retry:",
+			fmt.Sprintf("  Unblock-File -Path \"%s\"", absCommand),
+			"If the executable is under Downloads, move/copy it to a trusted path (for example C:\\Users\\<you>\\go\\bin) and update MCP config.",
+		)
+	}
+
+	return errors.New(strings.Join(hints, "\n"))
+}
+
+func isPermissionLikeError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "acesso negado") ||
+		strings.Contains(message, "access is denied") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "operation not permitted") ||
+		strings.Contains(message, "eperm")
 }

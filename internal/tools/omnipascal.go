@@ -414,6 +414,12 @@ func OmniPascalApplyTextEdits(ctx context.Context, client *omnipascal.Client, fi
 		return "", fmt.Errorf("applied edits but failed to resync OmniPascal: %w", err)
 	}
 
+	// Trigger a diagnostics refresh request so subsequent geterr reads are less
+	// likely to observe stale cache entries from a previous buffer state.
+	if err := client.GetErr(ctx, []string{filePath}, 0); err != nil {
+		return "", fmt.Errorf("applied edits but failed to refresh diagnostics for %s: %w", filePath, err)
+	}
+
 	return response, nil
 }
 

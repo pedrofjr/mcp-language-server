@@ -86,3 +86,29 @@ func TestHandleEventCachesDiagnostics(t *testing.T) {
 		t.Fatalf("diagnostics[1].Text = %q, want %q", diagnostics[1].Text, "semantic issue")
 	}
 }
+
+func TestInvalidateFileDiagnosticsClearsCache(t *testing.T) {
+	client := &Client{
+		syntaxDiagnostics:   make(map[string][]Diagnostic),
+		semanticDiagnostics: make(map[string][]Diagnostic),
+	}
+
+	filePath := filepath.Join(t.TempDir(), "unit1.pas")
+	normalized := normalizePath(filePath)
+	client.syntaxDiagnostics[normalized] = []Diagnostic{{Text: "syntax issue"}}
+	client.semanticDiagnostics[normalized] = []Diagnostic{{Text: "semantic issue"}}
+
+	client.InvalidateFileDiagnostics(filePath)
+
+	diagnostics := client.GetFileDiagnostics(filePath)
+	if len(diagnostics) != 0 {
+		t.Fatalf("len(GetFileDiagnostics()) = %d, want 0", len(diagnostics))
+	}
+
+	if _, ok := client.syntaxDiagnostics[normalized]; ok {
+		t.Fatalf("syntax diagnostics cache entry still exists for %s", normalized)
+	}
+	if _, ok := client.semanticDiagnostics[normalized]; ok {
+		t.Fatalf("semantic diagnostics cache entry still exists for %s", normalized)
+	}
+}

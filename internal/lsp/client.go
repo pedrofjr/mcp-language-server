@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,7 +82,7 @@ func NewClient(command string, args ...string) (*Client, error) {
 
 	// Start the LSP server process
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start LSP server: %w", err)
+		return nil, newProcessStartError("LSP server", command, err)
 	}
 
 	// Handle stderr in a separate goroutine with proper logging
@@ -105,6 +107,49 @@ func (c *Client) RegisterNotificationHandler(method string, handler Notification
 	c.notificationMu.Lock()
 	defer c.notificationMu.Unlock()
 	c.notificationHandlers[method] = handler
+}
+
+func newProcessStartError(kind, command string, err error) error {
+	if !isPermissionLikeError(err) {
+		return fmt.Errorf("failed to start %s: %w", kind, err)
+	}
+
+	absCommand := command
+	if resolved, resolveErr := exec.LookPath(command); resolveErr == nil {
+		absCommand = resolved
+	}
+
+	hints := []string{
+		fmt.Sprintf("failed to start %s: %v", kind, err),
+		fmt.Sprintf("executable: %s", absCommand),
+	}
+
+	if runtime.GOOS == "windows" {
+		hints = append(hints,
+			"Windows denied process spawn. If this binary is newly downloaded/compiled, unblock it and retry:",
+			fmt.Sprintf("  Unblock-File -Path \"%s\"", absCommand),
+			"If the executable is under Downloads, move/copy it to a trusted path (for example C:\\Users\\<you>\\go\\bin) and update MCP config.",
+		)
+	}
+
+	return errors.New(strings.Join(hints, "\n"))
+}
+
+func isPermissionLikeError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "acesso negado") ||
+		strings.Contains(message, "access is denied") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "operation not permitted") ||
+		strings.Contains(message, "eperm")
 }
 
 func (c *Client) RegisterServerRequestHandler(method string, handler ServerRequestHandler) {
