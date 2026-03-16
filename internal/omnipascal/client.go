@@ -461,7 +461,13 @@ func normalizePath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	return filepath.Clean(path)
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		// OmniPascal can emit diagnostics with different drive-letter casing.
+		// Normalize to a single key form to avoid stale/empty cache reads.
+		path = strings.ToLower(path)
+	}
+	return path
 }
 
 func newProcessStartError(kind, command string, err error) error {

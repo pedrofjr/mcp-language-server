@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -52,10 +53,12 @@ func OmniPascalChangeFile(ctx context.Context, client *omnipascal.Client, args o
 }
 
 func OmniPascalGetDiagnostics(ctx context.Context, client *omnipascal.Client, filePaths []string, delayMs, waitMs int) (string, error) {
+	before := make(map[string]string, len(filePaths))
 	for _, filePath := range filePaths {
 		if err := client.OpenFile(ctx, filePath); err != nil {
 			return "", fmt.Errorf("failed to open %s before geterr: %w", filePath, err)
 		}
+		before[filePath] = diagnosticsSignature(client.GetFileDiagnostics(filePath))
 	}
 
 	if err := client.GetErr(ctx, filePaths, delayMs); err != nil {
@@ -63,12 +66,33 @@ func OmniPascalGetDiagnostics(ctx context.Context, client *omnipascal.Client, fi
 	}
 
 	if waitMs > 0 {
-		timer := time.NewTimer(time.Duration(waitMs) * time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-timer.C:
+		deadline := time.Now().Add(time.Duration(waitMs) * time.Millisecond)
+		for {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+
+			changed := false
+			for _, filePath := range filePaths {
+				after := diagnosticsSignature(client.GetFileDiagnostics(filePath))
+				if after != before[filePath] {
+					changed = true
+					break
+				}
+			}
+			if changed || time.Now().After(deadline) {
+				break
+			}
+
+			// Poll frequently enough to catch async event propagation without
+			// introducing long fixed sleeps in LLM workflows.
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return "", ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 
@@ -95,6 +119,26 @@ func OmniPascalGetDiagnostics(ctx context.Context, client *omnipascal.Client, fi
 	}
 
 	return strings.Join(sections, "\n\n"), nil
+}
+
+func diagnosticsSignature(diagnostics []omnipascal.Diagnostic) string {
+	if len(diagnostics) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, diagnostic := range diagnostics {
+		b.WriteString(fmt.Sprintf("%d|%d|%d|%d|%d|%s\n",
+			diagnostic.Severity,
+			diagnostic.Start.Line,
+			diagnostic.Start.Offset,
+			diagnostic.End.Line,
+			diagnostic.End.Offset,
+			diagnostic.Text,
+		))
+	}
+
+	return b.String()
 }
 
 func OmniPascalCompletions(ctx context.Context, client *omnipascal.Client, filePath string, line, column int) (string, error) {
@@ -414,6 +458,23 @@ func OmniPascalApplyTextEdits(ctx context.Context, client *omnipascal.Client, fi
 		return "", fmt.Errorf("applied edits but failed to resync OmniPascal: %w", err)
 	}
 
+	refreshChar, err := firstFileCharacter(filePath)
+	if err != nil {
+		return "", err
+	}
+	if refreshChar != "" {
+		if err := client.ChangeFile(ctx, omnipascal.ChangeArgs{
+			File:         filePath,
+			Line:         1,
+			Offset:       1,
+			EndLine:      1,
+			EndOffset:    2,
+			InsertString: encodeURIComponent(refreshChar),
+		}); err != nil {
+			return "", fmt.Errorf("applied edits but failed to refresh OmniPascal buffer for %s: %w", filePath, err)
+		}
+	}
+
 	// Trigger a diagnostics refresh request so subsequent geterr reads are less
 	// likely to observe stale cache entries from a previous buffer state.
 	if err := client.GetErr(ctx, []string{filePath}, 0); err != nil {
@@ -421,6 +482,17 @@ func OmniPascalApplyTextEdits(ctx context.Context, client *omnipascal.Client, fi
 	}
 
 	return response, nil
+}
+
+func firstFileCharacter(filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	if len(content) == 0 {
+		return "", nil
+	}
+	return string(content[:1]), nil
 }
 
 func ApplyTextEditsWithoutClient(filePath string, edits []TextEdit) (string, error) {
