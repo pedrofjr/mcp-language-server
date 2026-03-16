@@ -121,6 +121,9 @@ func TestOmniPascalSmokeTools(t *testing.T) {
 		if !strings.Contains(result, "ERROR") {
 			t.Fatalf("expected at least one ERROR diagnostic after injecting syntax error, got:\n%s", result)
 		}
+		if !baselineHasLine1 && !strings.Contains(result, "L1:") {
+			t.Fatalf("expected injected syntax error to surface at line 1, got:\n%s", result)
+		}
 
 		if err := os.WriteFile(filePath, originalContent, 0644); err != nil {
 			t.Fatalf("failed to restore target file after geterr_with_error: %v", err)
