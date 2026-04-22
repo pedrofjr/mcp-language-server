@@ -220,7 +220,7 @@ func (w *WorkspaceWatcher) WatchWorkspace(ctx context.Context, workspacePath str
 				return
 			}
 
-			uri := fmt.Sprintf("file://%s", event.Name)
+			uri := string(protocol.URIFromPath(event.Name))
 
 			// Check if this is a file (not a directory) and should be excluded
 			isFile := false
@@ -451,6 +451,15 @@ func (w *WorkspaceWatcher) matchesPattern(path string, pattern protocol.GlobPatt
 
 	basePath := patternInfo.GetBasePath()
 	patternText := patternInfo.GetPattern()
+	if relativePattern, ok := pattern.Value.(protocol.RelativePattern); ok {
+		canonicalBasePath, basePathErr := parseRelativePatternBasePath(relativePattern)
+		if basePathErr != nil {
+			watcherLogger.Error("Error parsing RelativePattern base URI: %v", basePathErr)
+			return false
+		}
+		basePath = canonicalBasePath
+		patternText = relativePattern.Pattern
+	}
 
 	// watcherLogger.Debug("Matching path %s against pattern %s (base: %s)", path, patternText, basePath)
 
@@ -488,7 +497,6 @@ func (w *WorkspaceWatcher) matchesPattern(path string, pattern protocol.GlobPatt
 	}
 
 	// For relative patterns
-	basePath = strings.TrimPrefix(basePath, "file://")
 	basePath = filepath.ToSlash(basePath)
 
 	// Make path relative to basePath for matching
@@ -532,9 +540,16 @@ func (w *WorkspaceWatcher) debounceHandleFileEvent(ctx context.Context, uri stri
 // handleFileEvent sends file change notifications
 func (w *WorkspaceWatcher) handleFileEvent(ctx context.Context, uri string, changeType protocol.FileChangeType) {
 	// If the file is open and it's a change event, use didChange notification
-	filePath := uri[7:] // Remove "file://" prefix
+	filePath, err := parseURIPath(uri)
+	if err != nil {
+		watcherLogger.Error("Error parsing URI %q: %v", uri, err)
+		if notifyErr := w.notifyFileEvent(ctx, uri, changeType); notifyErr != nil {
+			watcherLogger.Error("Error notifying LSP server about file event: %v", notifyErr)
+		}
+		return
+	}
 	if changeType == protocol.FileChangeType(protocol.Changed) && w.client.IsFileOpen(filePath) {
-		err := w.client.NotifyChange(ctx, filePath)
+		err = w.client.NotifyChange(ctx, filePath)
 		if err != nil {
 			watcherLogger.Error("Error notifying change: %v", err)
 		}
@@ -545,6 +560,48 @@ func (w *WorkspaceWatcher) handleFileEvent(ctx context.Context, uri string, chan
 	if err := w.notifyFileEvent(ctx, uri, changeType); err != nil {
 		watcherLogger.Error("Error notifying LSP server about file event: %v", err)
 	}
+}
+
+func parseRelativePatternBasePath(relativePattern protocol.RelativePattern) (string, error) {
+	var rawURI string
+	switch baseURI := relativePattern.BaseURI.Value.(type) {
+	case string:
+		rawURI = baseURI
+	case protocol.DocumentUri:
+		rawURI = string(baseURI)
+	default:
+		return "", fmt.Errorf("unknown RelativePattern base URI type: %T", relativePattern.BaseURI.Value)
+	}
+
+	return parseURIPath(rawURI)
+}
+
+func parseURIPath(rawURI string) (string, error) {
+	parsedURI, err := protocol.ParseDocumentUri(rawURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse document URI %q: %w", rawURI, err)
+	}
+
+	path, err := safeDocumentURIPath(parsedURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve document URI path %q: %w", rawURI, err)
+	}
+
+	if path == "" {
+		return "", fmt.Errorf("document URI %q resolved to empty path", rawURI)
+	}
+
+	return path, nil
+}
+
+func safeDocumentURIPath(uri protocol.DocumentUri) (path string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("failed to convert document URI to path: %v", recovered)
+		}
+	}()
+
+	return uri.Path(), nil
 }
 
 // notifyFileEvent sends a didChangeWatchedFiles notification for a file event

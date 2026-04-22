@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,7 +12,15 @@ import (
 )
 
 func ExtractTextFromLocation(loc protocol.Location) (string, error) {
-	path := strings.TrimPrefix(string(loc.URI), "file://")
+	parsedURI, err := protocol.ParseDocumentUri(string(loc.URI))
+	if err != nil {
+		return "", fmt.Errorf("invalid document URI %q: %w", loc.URI, err)
+	}
+
+	path, err := safeDocumentURIPath(parsedURI)
+	if err != nil {
+		return "", err
+	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -66,6 +75,22 @@ func ExtractTextFromLocation(loc protocol.Location) (string, error) {
 	result.WriteString(lastLine[:endChar])
 
 	return result.String(), nil
+}
+
+func safeDocumentURIPath(uri protocol.DocumentUri) (_ string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("failed to resolve document URI path for %q: %v", uri, recovered)
+			toolsLogger.Debug("document URI path conversion panic recovered for %q: %v\n%s", uri, recovered, debug.Stack())
+		}
+	}()
+
+	path := uri.Path()
+	if path == "" {
+		return "", fmt.Errorf("document URI has empty path: %q", uri)
+	}
+
+	return path, nil
 }
 
 func containsPosition(r protocol.Range, p protocol.Position) bool {

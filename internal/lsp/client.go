@@ -115,11 +115,13 @@ func (c *Client) RegisterServerRequestHandler(method string, handler ServerReque
 }
 
 func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (*protocol.InitializeResult, error) {
+	workspaceURI := protocol.URIFromPath(workspaceDir)
+
 	initParams := &protocol.InitializeParams{
 		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
 			WorkspaceFolders: []protocol.WorkspaceFolder{
 				{
-					URI:  protocol.URI("file://" + workspaceDir),
+					URI:  protocol.URI(workspaceURI),
 					Name: workspaceDir,
 				},
 			},
@@ -132,7 +134,7 @@ func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (
 				Version: "0.1.0",
 			},
 			RootPath: workspaceDir,
-			RootURI:  protocol.DocumentUri("file://" + workspaceDir),
+			RootURI:  workspaceURI,
 			Capabilities: protocol.ClientCapabilities{
 				Workspace: protocol.WorkspaceClientCapabilities{
 					Configuration: true,
@@ -423,8 +425,11 @@ func (c *Client) CloseAllFiles(ctx context.Context) {
 
 	// First collect all URIs that need to be closed
 	for uri := range c.openFiles {
-		// Convert URI back to file path by trimming "file://" prefix
-		filePath := strings.TrimPrefix(uri, "file://")
+		filePath, err := parseDocumentURIPath(uri)
+		if err != nil {
+			lspLogger.Error("Skipping close for invalid open file URI %q: %v", uri, err)
+			continue
+		}
 		filesToClose = append(filesToClose, filePath)
 	}
 	c.openFilesMu.Unlock()
@@ -438,6 +443,34 @@ func (c *Client) CloseAllFiles(ctx context.Context) {
 	}
 
 	lspLogger.Debug("Closed %d files", len(filesToClose))
+}
+
+func parseDocumentURIPath(rawURI string) (string, error) {
+	parsedURI, err := protocol.ParseDocumentUri(rawURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse document URI %q: %w", rawURI, err)
+	}
+
+	path, err := safeDocumentURIPath(parsedURI)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve document URI path %q: %w", rawURI, err)
+	}
+
+	if path == "" {
+		return "", fmt.Errorf("document URI %q resolved to empty path", rawURI)
+	}
+
+	return path, nil
+}
+
+func safeDocumentURIPath(uri protocol.DocumentUri) (path string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("failed to convert document URI to path: %v", recovered)
+		}
+	}()
+
+	return uri.Path(), nil
 }
 
 func (c *Client) GetFileDiagnostics(uri protocol.DocumentUri) []protocol.Diagnostic {
