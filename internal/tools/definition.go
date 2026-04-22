@@ -14,6 +14,9 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 		Query: symbolName,
 	})
 	if err != nil {
+		if isMethodNotSupportedError(err) {
+			return readDefinitionWithInferredPosition(ctx, client, symbolName)
+		}
 		return "", fmt.Errorf("failed to fetch symbol: %v", err)
 	}
 
@@ -64,36 +67,13 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 		toolsLogger.Debug("Found symbol: %s", symbol.GetName())
 		loc := symbol.GetLocation()
 
-		err := client.OpenFile(ctx, loc.URI.Path())
-		if err != nil {
-			toolsLogger.Error("Error opening file: %v", err)
+		definitionText, defErr := buildDefinitionBlock(ctx, client, symbol.GetName(), loc, kind, container)
+		if defErr != nil {
+			toolsLogger.Error("Error getting definition: %v", defErr)
 			continue
 		}
 
-		banner := "---\n\n"
-		definition, loc, err := GetFullDefinition(ctx, client, loc)
-		locationInfo := fmt.Sprintf(
-			"Symbol: %s\n"+
-				"File: %s\n"+
-				kind+
-				container+
-				"Range: L%d:C%d - L%d:C%d\n\n",
-			symbol.GetName(),
-			strings.TrimPrefix(string(loc.URI), "file://"),
-			loc.Range.Start.Line+1,
-			loc.Range.Start.Character+1,
-			loc.Range.End.Line+1,
-			loc.Range.End.Character+1,
-		)
-
-		if err != nil {
-			toolsLogger.Error("Error getting definition: %v", err)
-			continue
-		}
-
-		definition = addLineNumbers(definition, int(loc.Range.Start.Line)+1)
-
-		definitions = append(definitions, banner+locationInfo+definition+"\n")
+		definitions = append(definitions, definitionText)
 	}
 
 	if len(definitions) == 0 {
@@ -101,4 +81,67 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	return strings.Join(definitions, ""), nil
+}
+
+func readDefinitionWithInferredPosition(ctx context.Context, client *lsp.Client, symbolName string) (string, error) {
+	inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
+	if !found {
+		return fmt.Sprintf("%s not found", symbolName), nil
+	}
+
+	defResult, err := client.Definition(ctx, protocol.DefinitionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: inferredLocation.URI},
+			Position:     inferredLocation.Range.Start,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch definition fallback: %v", err)
+	}
+
+	locations := definitionResultToLocations(defResult)
+	if len(locations) == 0 {
+		locations = []protocol.Location{inferredLocation}
+	}
+
+	definitionText, buildErr := buildDefinitionBlock(ctx, client, symbolName, locations[0], "", "")
+	if buildErr != nil {
+		return "", fmt.Errorf("failed to build fallback definition: %v", buildErr)
+	}
+
+	return definitionText, nil
+}
+
+func buildDefinitionBlock(ctx context.Context, client *lsp.Client, symbolName string, loc protocol.Location, kind string, container string) (string, error) {
+	if err := client.OpenFile(ctx, loc.URI.Path()); err != nil {
+		return "", fmt.Errorf("error opening file: %w", err)
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		return "", err
+	}
+
+	fileDisplayPath := string(fullLocation.URI)
+	if normalizedPath, ok := uriPathFromString(fileDisplayPath); ok {
+		fileDisplayPath = normalizedPath
+	}
+
+	banner := "---\n\n"
+	locationInfo := fmt.Sprintf(
+		"Symbol: %s\n"+
+			"File: %s\n"+
+			kind+
+			container+
+			"Range: L%d:C%d - L%d:C%d\n\n",
+		symbolName,
+		fileDisplayPath,
+		fullLocation.Range.Start.Line+1,
+		fullLocation.Range.Start.Character+1,
+		fullLocation.Range.End.Line+1,
+		fullLocation.Range.End.Character+1,
+	)
+
+	definition = addLineNumbers(definition, int(fullLocation.Range.Start.Line)+1)
+	return banner + locationInfo + definition + "\n", nil
 }

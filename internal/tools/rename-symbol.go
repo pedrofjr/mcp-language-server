@@ -42,6 +42,9 @@ func RenameSymbol(ctx context.Context, client *lsp.Client, filePath string, line
 	// Execute the rename operation
 	workspaceEdit, err := client.Rename(ctx, params)
 	if err != nil {
+		if isMethodNotSupportedError(err) {
+			return "", fmt.Errorf("failed to rename symbol: servidor LSP sem suporte a renameProvider")
+		}
 		return "", fmt.Errorf("failed to rename symbol: %v", err)
 	}
 

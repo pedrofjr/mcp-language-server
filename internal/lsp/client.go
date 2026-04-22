@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -287,7 +288,7 @@ type OpenFileInfo struct {
 }
 
 func (c *Client) OpenFile(ctx context.Context, filepath string) error {
-	uri := fmt.Sprintf("file://%s", filepath)
+	uri := string(protocol.URIFromPath(filepath))
 
 	c.openFilesMu.Lock()
 	if _, exists := c.openFiles[uri]; exists {
@@ -328,7 +329,7 @@ func (c *Client) OpenFile(ctx context.Context, filepath string) error {
 }
 
 func (c *Client) NotifyChange(ctx context.Context, filepath string) error {
-	uri := fmt.Sprintf("file://%s", filepath)
+	uri := string(protocol.URIFromPath(filepath))
 
 	content, err := os.ReadFile(filepath)
 	if err != nil {
@@ -367,7 +368,7 @@ func (c *Client) NotifyChange(ctx context.Context, filepath string) error {
 }
 
 func (c *Client) CloseFile(ctx context.Context, filepath string) error {
-	uri := fmt.Sprintf("file://%s", filepath)
+	uri := string(protocol.URIFromPath(filepath))
 
 	c.openFilesMu.Lock()
 	if _, exists := c.openFiles[uri]; !exists {
@@ -394,11 +395,25 @@ func (c *Client) CloseFile(ctx context.Context, filepath string) error {
 }
 
 func (c *Client) IsFileOpen(filepath string) bool {
-	uri := fmt.Sprintf("file://%s", filepath)
+	uri := string(protocol.URIFromPath(filepath))
 	c.openFilesMu.RLock()
 	defer c.openFilesMu.RUnlock()
 	_, exists := c.openFiles[uri]
 	return exists
+}
+
+// GetOpenFilesSnapshot returns a sorted copy of currently opened file URIs.
+func (c *Client) GetOpenFilesSnapshot() []string {
+	c.openFilesMu.RLock()
+	defer c.openFilesMu.RUnlock()
+
+	openFiles := make([]string, 0, len(c.openFiles))
+	for uri := range c.openFiles {
+		openFiles = append(openFiles, uri)
+	}
+
+	sort.Strings(openFiles)
+	return openFiles
 }
 
 // CloseAllFiles closes all currently open files

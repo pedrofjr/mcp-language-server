@@ -21,38 +21,20 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 		}
 	}
 
-	// First get the symbol location like ReadDefinition does
-	symbolResult, err := client.Symbol(ctx, protocol.WorkspaceSymbolParams{
-		Query: symbolName,
-	})
+	symbolLocations, err := resolveReferenceSymbolLocations(ctx, client, symbolName)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch symbol: %v", err)
+		return "", err
 	}
-
-	results, err := symbolResult.Results()
-	if err != nil {
-		return "", fmt.Errorf("failed to parse results: %v", err)
+	if len(symbolLocations) == 0 {
+		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
 	}
 
 	var allReferences []string
-	for _, symbol := range results {
-		// Handle different matching strategies based on the search term
-		if strings.Contains(symbolName, ".") {
-			// For qualified names like "Type.Method", check for various matches
-			parts := strings.Split(symbolName, ".")
-			methodName := parts[len(parts)-1]
-
-			// Try matching the unqualified method name for languages that don't use qualified names in symbols
-			if symbol.GetName() != symbolName && symbol.GetName() != methodName {
-				continue
-			}
-		} else if symbol.GetName() != symbolName {
-			// For unqualified names, exact match only
+	for _, loc := range symbolLocations {
+		if err := client.OpenFile(ctx, loc.URI.Path()); err != nil {
+			toolsLogger.Error("Error opening file: %v", err)
 			continue
 		}
-
-		// Get the location of the symbol
-		loc := symbol.GetLocation()
 
 		// Use LSP references request with correct params structure
 		refsParams := protocol.ReferenceParams{
@@ -65,12 +47,6 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 			Context: protocol.ReferenceContext{
 				IncludeDeclaration: false,
 			},
-		}
-		// File is likely to be opened already, but may not be.
-		err := client.OpenFile(ctx, loc.URI.Path())
-		if err != nil {
-			toolsLogger.Error("Error opening file: %v", err)
-			continue
 		}
 		refs, err := client.References(ctx, refsParams)
 		if err != nil {
@@ -94,7 +70,10 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 		for _, uriStr := range uris {
 			uri := protocol.DocumentUri(uriStr)
 			fileRefs := refsByFile[uri]
-			filePath := strings.TrimPrefix(uriStr, "file://")
+			filePath, ok := uriPathFromString(uriStr)
+			if !ok {
+				filePath = uriStr
+			}
 
 			// Format file header
 			fileInfo := fmt.Sprintf("---\n\n%s\nReferences in File: %d\n",
@@ -148,4 +127,42 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	return strings.Join(allReferences, "\n"), nil
+}
+
+func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, symbolName string) ([]protocol.Location, error) {
+	symbolResult, err := client.Symbol(ctx, protocol.WorkspaceSymbolParams{Query: symbolName})
+	if err != nil {
+		if !isMethodNotSupportedError(err) {
+			return nil, fmt.Errorf("failed to fetch symbol: %v", err)
+		}
+
+		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
+		if !found {
+			return nil, nil
+		}
+
+		return []protocol.Location{inferredLocation}, nil
+	}
+
+	results, err := symbolResult.Results()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse results: %v", err)
+	}
+
+	locations := make([]protocol.Location, 0, len(results))
+	for _, symbol := range results {
+		if strings.Contains(symbolName, ".") {
+			parts := strings.Split(symbolName, ".")
+			methodName := parts[len(parts)-1]
+			if symbol.GetName() != symbolName && symbol.GetName() != methodName {
+				continue
+			}
+		} else if symbol.GetName() != symbolName {
+			continue
+		}
+
+		locations = append(locations, symbol.GetLocation())
+	}
+
+	return locations, nil
 }

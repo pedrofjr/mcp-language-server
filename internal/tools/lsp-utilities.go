@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
@@ -19,51 +18,54 @@ func GetFullDefinition(ctx context.Context, client *lsp.Client, startLocation pr
 		},
 	}
 
-	// Get all symbols in document
-	symResult, err := client.DocumentSymbol(ctx, symParams)
-	if err != nil {
-		return "", protocol.Location{}, fmt.Errorf("failed to get document symbols: %w", err)
-	}
-
-	symbols, err := symResult.Results()
-	if err != nil {
-		return "", protocol.Location{}, fmt.Errorf("failed to process document symbols: %w", err)
-	}
-
 	var symbolRange protocol.Range
 	found := false
 
-	// Search for symbol at startLocation
-	var searchSymbols func(symbols []protocol.DocumentSymbolResult) bool
-	searchSymbols = func(symbols []protocol.DocumentSymbolResult) bool {
-		for _, sym := range symbols {
-			if containsPosition(sym.GetRange(), startLocation.Range.Start) {
-				symbolRange = sym.GetRange()
-				found = true
-				return true
-			}
-			// Handle nested symbols if it's a DocumentSymbol
-			if ds, ok := sym.(*protocol.DocumentSymbol); ok && len(ds.Children) > 0 {
-				childSymbols := make([]protocol.DocumentSymbolResult, len(ds.Children))
-				for i := range ds.Children {
-					childSymbols[i] = &ds.Children[i]
-				}
-				if searchSymbols(childSymbols) {
+	// Get all symbols in document
+	symResult, err := client.DocumentSymbol(ctx, symParams)
+	if err != nil {
+		if !isMethodNotSupportedError(err) {
+			return "", protocol.Location{}, fmt.Errorf("failed to get document symbols: %w", err)
+		}
+	} else {
+		symbols, resultErr := symResult.Results()
+		if resultErr != nil {
+			return "", protocol.Location{}, fmt.Errorf("failed to process document symbols: %w", resultErr)
+		}
+
+		// Search for symbol at startLocation
+		var searchSymbols func(symbols []protocol.DocumentSymbolResult) bool
+		searchSymbols = func(symbols []protocol.DocumentSymbolResult) bool {
+			for _, sym := range symbols {
+				if containsPosition(sym.GetRange(), startLocation.Range.Start) {
+					symbolRange = sym.GetRange()
+					found = true
 					return true
 				}
+				// Handle nested symbols if it's a DocumentSymbol
+				if ds, ok := sym.(*protocol.DocumentSymbol); ok && len(ds.Children) > 0 {
+					childSymbols := make([]protocol.DocumentSymbolResult, len(ds.Children))
+					for i := range ds.Children {
+						childSymbols[i] = &ds.Children[i]
+					}
+					if searchSymbols(childSymbols) {
+						return true
+					}
+				}
 			}
+			return false
 		}
-		return false
+
+		found = searchSymbols(symbols)
 	}
 
-	found = searchSymbols(symbols)
+	if !found {
+		symbolRange = startLocation.Range
+		found = true
+	}
 
 	if found {
-		// Convert URI to filesystem path
-		filePath, err := url.PathUnescape(strings.TrimPrefix(string(startLocation.URI), "file://"))
-		if err != nil {
-			return "", protocol.Location{}, fmt.Errorf("failed to unescape URI: %w", err)
-		}
+		filePath := startLocation.URI.Path()
 
 		// Read the file to get the full lines of the definition
 		// because we may have a start and end column
@@ -73,6 +75,20 @@ func GetFullDefinition(ctx context.Context, client *lsp.Client, startLocation pr
 		}
 
 		lines := strings.Split(string(content), "\n")
+		if len(lines) == 0 {
+			return "", protocol.Location{}, fmt.Errorf("file is empty")
+		}
+
+		maxLine := uint32(len(lines) - 1)
+		if symbolRange.Start.Line > maxLine {
+			symbolRange.Start.Line = maxLine
+		}
+		if symbolRange.End.Line > maxLine {
+			symbolRange.End.Line = maxLine
+		}
+		if symbolRange.End.Line < symbolRange.Start.Line {
+			symbolRange.End.Line = symbolRange.Start.Line
+		}
 
 		// Extend start to beginning of line
 		symbolRange.Start.Character = 0
