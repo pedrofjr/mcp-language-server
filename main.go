@@ -80,6 +80,14 @@ func newServer(config *config) (*mcpServer, error) {
 	}, nil
 }
 
+func newMCPServer() *server.MCPServer {
+	return server.NewMCPServer(
+		"MCP Language Server",
+		"v0.0.2",
+		server.WithRecovery(),
+	)
+}
+
 func (s *mcpServer) initializeLSP() error {
 	if err := os.Chdir(s.config.workspaceDir); err != nil {
 		return fmt.Errorf("failed to change to workspace directory: %v", err)
@@ -108,12 +116,7 @@ func (s *mcpServer) start() error {
 		return err
 	}
 
-	s.mcpServer = server.NewMCPServer(
-		"MCP Language Server",
-		"v0.0.2",
-		server.WithLogging(),
-		server.WithRecovery(),
-	)
+	s.mcpServer = newMCPServer()
 
 	err := s.registerTools()
 	if err != nil {
