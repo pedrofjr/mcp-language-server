@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -20,9 +22,50 @@ var (
 	osRename    = os.Rename
 )
 
+func documentURIToPath(uri protocol.DocumentUri) (string, error) {
+	rawURI := string(uri)
+	if rawURI == "" {
+		return "", fmt.Errorf("invalid URI: empty URI")
+	}
+
+	parsedURI, err := protocol.ParseDocumentUri(rawURI)
+	if err != nil {
+		return "", fmt.Errorf("invalid URI %q: %w", rawURI, err)
+	}
+
+	path, pathErr := safeDocumentURIPath(parsedURI)
+	if pathErr != nil {
+		return "", fmt.Errorf("invalid URI %q: %w", rawURI, pathErr)
+	}
+
+	if path == "" {
+		return "", fmt.Errorf("invalid URI %q: empty file path", rawURI)
+	}
+
+	normalizedPath := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		normalizedPath = filepath.ToSlash(normalizedPath)
+	}
+
+	return normalizedPath, nil
+}
+
+func safeDocumentURIPath(uri protocol.DocumentUri) (path string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("failed to convert document URI to path: %v", recovered)
+		}
+	}()
+
+	return uri.Path(), nil
+}
+
 // ApplyTextEdits applies a sequence of text edits to a file specified by URI
 func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
-	path := strings.TrimPrefix(string(uri), "file://")
+	path, err := documentURIToPath(uri)
+	if err != nil {
+		return err
+	}
 
 	// Read the file content
 	content, err := osReadFile(path)
@@ -173,7 +216,10 @@ func ApplyTextEdit(lines []string, edit protocol.TextEdit, lineEnding string) ([
 // ApplyDocumentChange applies a DocumentChange (create/rename/delete operations)
 func ApplyDocumentChange(change protocol.DocumentChange) error {
 	if change.CreateFile != nil {
-		path := strings.TrimPrefix(string(change.CreateFile.URI), "file://")
+		path, err := documentURIToPath(change.CreateFile.URI)
+		if err != nil {
+			return err
+		}
 		if change.CreateFile.Options != nil {
 			if change.CreateFile.Options.Overwrite {
 				// Proceed with overwrite
@@ -189,7 +235,10 @@ func ApplyDocumentChange(change protocol.DocumentChange) error {
 	}
 
 	if change.DeleteFile != nil {
-		path := strings.TrimPrefix(string(change.DeleteFile.URI), "file://")
+		path, err := documentURIToPath(change.DeleteFile.URI)
+		if err != nil {
+			return err
+		}
 		if change.DeleteFile.Options != nil && change.DeleteFile.Options.Recursive {
 			if err := osRemoveAll(path); err != nil {
 				return fmt.Errorf("failed to delete directory recursively: %w", err)
@@ -202,8 +251,15 @@ func ApplyDocumentChange(change protocol.DocumentChange) error {
 	}
 
 	if change.RenameFile != nil {
-		oldPath := strings.TrimPrefix(string(change.RenameFile.OldURI), "file://")
-		newPath := strings.TrimPrefix(string(change.RenameFile.NewURI), "file://")
+		oldPath, err := documentURIToPath(change.RenameFile.OldURI)
+		if err != nil {
+			return err
+		}
+
+		newPath, err := documentURIToPath(change.RenameFile.NewURI)
+		if err != nil {
+			return err
+		}
 		if change.RenameFile.Options != nil {
 			if !change.RenameFile.Options.Overwrite {
 				if _, err := osStat(newPath); err == nil {

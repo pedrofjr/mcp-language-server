@@ -3,7 +3,9 @@ package utilities
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -822,6 +824,48 @@ func TestApplyDocumentChange(t *testing.T) {
 			},
 		},
 		{
+			name: "Create file with percent-encoded URI",
+			change: protocol.DocumentChange{
+				CreateFile: &protocol.CreateFile{
+					URI: "file:///tmp/Projetos%20Teste%20LSP/new%20file.txt",
+				},
+			},
+			expectErr: false,
+			setupMocks: func(mfs *mockFileSystem) {
+				mfs.files = map[string][]byte{}
+			},
+			checkState: func(t *testing.T, mfs *mockFileSystem) {
+				if _, ok := mfs.files["/tmp/Projetos Teste LSP/new file.txt"]; !ok {
+					t.Errorf("Decoded path file was not created")
+				}
+			},
+		},
+		{
+			name: "Rename file with percent-encoded URIs",
+			change: protocol.DocumentChange{
+				RenameFile: &protocol.RenameFile{
+					OldURI: "file:///tmp/Projetos%20Teste%20LSP/old%20name.txt",
+					NewURI: "file:///tmp/Projetos%20Teste%20LSP/new%20name.txt",
+				},
+			},
+			expectErr: false,
+			setupMocks: func(mfs *mockFileSystem) {
+				mfs.files = map[string][]byte{
+					"/tmp/Projetos Teste LSP/old name.txt": []byte("file content"),
+				}
+			},
+			checkState: func(t *testing.T, mfs *mockFileSystem) {
+				if _, ok := mfs.files["/tmp/Projetos Teste LSP/old name.txt"]; ok {
+					t.Errorf("Old decoded path file still exists")
+				}
+				if content, ok := mfs.files["/tmp/Projetos Teste LSP/new name.txt"]; !ok {
+					t.Errorf("Renamed decoded path file was not created")
+				} else if string(content) != "file content" {
+					t.Errorf("Renamed decoded path file has incorrect content: %s", string(content))
+				}
+			},
+		},
+		{
 			name: "Rename file - no overwrite",
 			change: protocol.DocumentChange{
 				RenameFile: &protocol.RenameFile{
@@ -961,6 +1005,35 @@ func TestApplyWorkspaceEdit(t *testing.T) {
 					t.Errorf("File2 not found")
 				} else if string(content) != "Line 1\nModified\nLine 3" {
 					t.Errorf("Edit to file2 not applied correctly, content: %s", string(content))
+				}
+			},
+		},
+		{
+			name: "Text edits via Changes field with percent-encoded URI",
+			edit: protocol.WorkspaceEdit{
+				Changes: map[protocol.DocumentUri][]protocol.TextEdit{
+					"file:///tmp/Projetos%20Teste%20LSP/main%20file.go": {
+						{
+							Range: protocol.Range{
+								Start: protocol.Position{Line: 0, Character: 6},
+								End:   protocol.Position{Line: 0, Character: 10},
+							},
+							NewText: "gamma",
+						},
+					},
+				},
+			},
+			expectErr: false,
+			setupMocks: func(mfs *mockFileSystem) {
+				mfs.files = map[string][]byte{
+					"/tmp/Projetos Teste LSP/main file.go": []byte("alpha beta"),
+				}
+			},
+			checkState: func(t *testing.T, mfs *mockFileSystem) {
+				if content, ok := mfs.files["/tmp/Projetos Teste LSP/main file.go"]; !ok {
+					t.Errorf("Decoded path file not found")
+				} else if string(content) != "alpha gamma" {
+					t.Errorf("Edit to decoded path file not applied correctly, content: %s", string(content))
 				}
 			},
 		},
@@ -1112,5 +1185,111 @@ func TestApplyWorkspaceEdit(t *testing.T) {
 				tt.checkState(t, mfs)
 			}
 		})
+	}
+}
+
+func TestApplyWorkspaceEdit_InvalidURIInChanges_ReturnsClearErrorNoPanic(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ApplyWorkspaceEdit should not panic for malformed URI, panic: %v", r)
+		}
+	}()
+
+	err := ApplyWorkspaceEdit(protocol.WorkspaceEdit{
+		Changes: map[protocol.DocumentUri][]protocol.TextEdit{
+			"file://%zz": {
+				{
+					Range: protocol.Range{
+						Start: protocol.Position{Line: 0, Character: 0},
+						End:   protocol.Position{Line: 0, Character: 0},
+					},
+					NewText: "x",
+				},
+			},
+		},
+	})
+
+	if err == nil {
+		t.Fatalf("expected clear invalid URI error, got nil")
+	}
+
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid uri") {
+		t.Fatalf("expected error to clearly mention invalid URI, got: %v", err)
+	}
+}
+
+func TestDocumentURIToPath_WindowsDriveURIFormats(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  protocol.DocumentUri
+	}{
+		{
+			name: "drive letter with colon",
+			uri:  "file:///C:/Projetos%20Teste%20LSP/a.txt",
+		},
+		{
+			name: "drive letter with encoded colon",
+			uri:  "file:///C%3A/Projetos%20Teste%20LSP/a.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsedURI, err := protocol.ParseDocumentUri(string(tt.uri))
+			if err != nil {
+				t.Fatalf("ParseDocumentUri() unexpected error: %v", err)
+			}
+
+			expectedPath := filepath.Clean(parsedURI.Path())
+			if runtime.GOOS == "windows" {
+				expectedPath = filepath.ToSlash(expectedPath)
+			}
+
+			actualPath, err := documentURIToPath(tt.uri)
+			if err != nil {
+				t.Fatalf("documentURIToPath() unexpected error: %v", err)
+			}
+
+			if actualPath != expectedPath {
+				t.Fatalf("documentURIToPath() = %q, expected %q", actualPath, expectedPath)
+			}
+		})
+	}
+}
+
+func TestApplyDocumentChange_RenameFileInvalidURI_ReturnsClearErrorNoPanic(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/origin.txt": []byte("content"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ApplyDocumentChange should not panic for malformed URI, panic: %v", r)
+		}
+	}()
+
+	err := ApplyDocumentChange(protocol.DocumentChange{
+		RenameFile: &protocol.RenameFile{
+			OldURI: "file://%zz",
+			NewURI: "file:///test/renamed.txt",
+		},
+	})
+
+	if err == nil {
+		t.Fatalf("expected clear invalid URI error, got nil")
+	}
+
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid uri") {
+		t.Fatalf("expected error to clearly mention invalid URI, got: %v", err)
 	}
 }
