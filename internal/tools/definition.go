@@ -10,6 +10,10 @@ import (
 )
 
 func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) (string, error) {
+	if !client.SupportsWorkspaceSymbol() {
+		return readDefinitionWithInferredPosition(ctx, client, symbolName)
+	}
+
 	symbolResult, err := client.Symbol(ctx, protocol.WorkspaceSymbolParams{
 		Query: symbolName,
 	})

@@ -12,51 +12,29 @@ import (
 
 // Gets the full code block surrounding the start of the input location
 func GetFullDefinition(ctx context.Context, client *lsp.Client, startLocation protocol.Location) (string, protocol.Location, error) {
-	symParams := protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{
-			URI: startLocation.URI,
-		},
-	}
-
 	var symbolRange protocol.Range
 	found := false
 
-	// Get all symbols in document
-	symResult, err := client.DocumentSymbol(ctx, symParams)
-	if err != nil {
-		if !isMethodNotSupportedError(err) {
-			return "", protocol.Location{}, fmt.Errorf("failed to get document symbols: %w", err)
-		}
-	} else {
-		symbols, resultErr := symResult.Results()
-		if resultErr != nil {
-			return "", protocol.Location{}, fmt.Errorf("failed to process document symbols: %w", resultErr)
+	if client.SupportsDocumentSymbol() {
+		symParams := protocol.DocumentSymbolParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: startLocation.URI,
+			},
 		}
 
-		// Search for symbol at startLocation
-		var searchSymbols func(symbols []protocol.DocumentSymbolResult) bool
-		searchSymbols = func(symbols []protocol.DocumentSymbolResult) bool {
-			for _, sym := range symbols {
-				if containsPosition(sym.GetRange(), startLocation.Range.Start) {
-					symbolRange = sym.GetRange()
-					found = true
-					return true
-				}
-				// Handle nested symbols if it's a DocumentSymbol
-				if ds, ok := sym.(*protocol.DocumentSymbol); ok && len(ds.Children) > 0 {
-					childSymbols := make([]protocol.DocumentSymbolResult, len(ds.Children))
-					for i := range ds.Children {
-						childSymbols[i] = &ds.Children[i]
-					}
-					if searchSymbols(childSymbols) {
-						return true
-					}
-				}
+		symResult, err := client.DocumentSymbol(ctx, symParams)
+		if err != nil {
+			if !isMethodNotSupportedError(err) {
+				return "", protocol.Location{}, fmt.Errorf("failed to get document symbols: %w", err)
 			}
-			return false
-		}
+		} else {
+			symbols, resultErr := symResult.Results()
+			if resultErr != nil {
+				return "", protocol.Location{}, fmt.Errorf("failed to process document symbols: %w", resultErr)
+			}
 
-		found = searchSymbols(symbols)
+			symbolRange, found = findDocumentSymbolContainerRange(symbols, startLocation.Range.Start)
+		}
 	}
 
 	if !found {
@@ -154,16 +132,78 @@ func GetFullDefinition(ctx context.Context, client *lsp.Client, startLocation pr
 	return "", protocol.Location{}, fmt.Errorf("symbol not found")
 }
 
+func findDocumentSymbolContainerRange(symbols []protocol.DocumentSymbolResult, position protocol.Position) (protocol.Range, bool) {
+	for _, sym := range symbols {
+		r := sym.GetRange()
+		if containsPosition(r, position) {
+			return r, true
+		}
+
+		if ds, ok := sym.(*protocol.DocumentSymbol); ok && len(ds.Children) > 0 {
+			childSymbols := make([]protocol.DocumentSymbolResult, len(ds.Children))
+			for i := range ds.Children {
+				childSymbols[i] = &ds.Children[i]
+			}
+
+			if childRange, childFound := findDocumentSymbolContainerRange(childSymbols, position); childFound {
+				return childRange, true
+			}
+		}
+	}
+
+	return protocol.Range{}, false
+}
+
 // GetLineRangesToDisplay determines which lines should be displayed for a set of locations
 func GetLineRangesToDisplay(ctx context.Context, client *lsp.Client, locations []protocol.Location, totalLines int, contextLines int) (map[int]bool, error) {
 	// Set to track which lines need to be displayed
 	linesToShow := make(map[int]bool)
+	canUseDocumentSymbols := client.SupportsDocumentSymbol()
+	documentSymbolCache := make(map[protocol.DocumentUri][]protocol.DocumentSymbolResult)
+	documentSymbolDisabledByURI := make(map[protocol.DocumentUri]bool)
 
 	// For each location, get its container and add relevant lines
 	for _, loc := range locations {
-		// Use GetFullDefinition to find container
-		_, containerLoc, err := GetFullDefinition(ctx, client, loc)
-		if err != nil {
+		containerRange := protocol.Range{}
+		foundContainer := false
+
+		if canUseDocumentSymbols && !documentSymbolDisabledByURI[loc.URI] {
+			symbols, cached := documentSymbolCache[loc.URI]
+			if !cached {
+				symResult, err := client.DocumentSymbol(ctx, protocol.DocumentSymbolParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: loc.URI},
+				})
+				if err != nil {
+					if isMethodNotSupportedError(err) {
+						canUseDocumentSymbols = false
+					} else {
+						toolsLogger.Debug("failed to get document symbols for %s: %v", loc.URI, err)
+						documentSymbolDisabledByURI[loc.URI] = true
+					}
+					documentSymbolCache[loc.URI] = nil
+				} else {
+					results, resultErr := symResult.Results()
+					if resultErr != nil {
+						toolsLogger.Debug("failed to parse document symbols for %s: %v", loc.URI, resultErr)
+						documentSymbolDisabledByURI[loc.URI] = true
+						documentSymbolCache[loc.URI] = nil
+					} else {
+						documentSymbolCache[loc.URI] = results
+					}
+				}
+
+				symbols = documentSymbolCache[loc.URI]
+			}
+
+			if len(symbols) > 0 {
+				if resolvedRange, ok := findDocumentSymbolContainerRange(symbols, loc.Range.Start); ok {
+					containerRange = resolvedRange
+					foundContainer = true
+				}
+			}
+		}
+
+		if !foundContainer {
 			// If container not found, just use the location's line
 			refLine := int(loc.Range.Start.Line)
 			linesToShow[refLine] = true
@@ -178,8 +218,8 @@ func GetLineRangesToDisplay(ctx context.Context, client *lsp.Client, locations [
 		}
 
 		// Add container start and end lines
-		containerStart := int(containerLoc.Range.Start.Line)
-		containerEnd := int(containerLoc.Range.End.Line)
+		containerStart := int(containerRange.Start.Line)
+		containerEnd := int(containerRange.End.Line)
 		linesToShow[containerStart] = true
 		// linesToShow[containerEnd] = true
 

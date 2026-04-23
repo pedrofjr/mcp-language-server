@@ -130,6 +130,15 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 }
 
 func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, symbolName string) ([]protocol.Location, error) {
+	if !client.SupportsWorkspaceSymbol() {
+		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
+		if !found {
+			return nil, nil
+		}
+
+		return []protocol.Location{inferredLocation}, nil
+	}
+
 	symbolResult, err := client.Symbol(ctx, protocol.WorkspaceSymbolParams{Query: symbolName})
 	if err != nil {
 		if !isMethodNotSupportedError(err) {

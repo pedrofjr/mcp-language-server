@@ -23,6 +23,10 @@ type Client struct {
 	stdout *bufio.Reader
 	stderr io.ReadCloser
 
+	// Capabilities returned by server initialize response.
+	capabilities   protocol.ServerCapabilities
+	capabilitiesMu sync.RWMutex
+
 	// Request ID counter
 	nextID atomic.Int32
 
@@ -199,6 +203,10 @@ func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
+	c.capabilitiesMu.Lock()
+	c.capabilities = result.Capabilities
+	c.capabilitiesMu.Unlock()
+
 	if err := c.Notify(ctx, "initialized", struct{}{}); err != nil {
 		return nil, fmt.Errorf("initialized notification failed: %w", err)
 	}
@@ -228,6 +236,54 @@ func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (
 	}
 
 	return &result, nil
+}
+
+func (c *Client) SupportsDocumentSymbol() bool {
+	c.capabilitiesMu.RLock()
+	provider := c.capabilities.DocumentSymbolProvider
+	c.capabilitiesMu.RUnlock()
+
+	return supportsDocumentSymbolProvider(provider)
+}
+
+func (c *Client) SupportsWorkspaceSymbol() bool {
+	c.capabilitiesMu.RLock()
+	provider := c.capabilities.WorkspaceSymbolProvider
+	c.capabilitiesMu.RUnlock()
+
+	return supportsWorkspaceSymbolProvider(provider)
+}
+
+func supportsDocumentSymbolProvider(provider *protocol.Or_ServerCapabilities_documentSymbolProvider) bool {
+	if provider == nil {
+		return false
+	}
+
+	v := provider.Value
+	switch typed := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	default:
+		return true
+	}
+}
+
+func supportsWorkspaceSymbolProvider(provider *protocol.Or_ServerCapabilities_workspaceSymbolProvider) bool {
+	if provider == nil {
+		return false
+	}
+
+	v := provider.Value
+	switch typed := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	default:
+		return true
+	}
 }
 
 func (c *Client) Close() error {
