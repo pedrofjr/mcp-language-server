@@ -82,6 +82,10 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 		return "", fmt.Errorf("failed to apply text edits: %v", err)
 	}
 
+	if err := client.NotifyChange(ctx, filePath); err != nil {
+		return "", fmt.Errorf("failed to sync edited file with LSP: %v", err)
+	}
+
 	return fmt.Sprintf("Successfully applied text edits. %d lines removed, %d lines added.", linesRemovedSorted, linesAddedSorted), nil
 }
 

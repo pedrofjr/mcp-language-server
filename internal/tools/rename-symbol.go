@@ -120,6 +120,10 @@ func RenameSymbol(ctx context.Context, client *lsp.Client, filePath string, line
 		return "", fmt.Errorf("failed to apply changes: %v", err)
 	}
 
+	if err := client.NotifyChange(ctx, filePath); err != nil {
+		return "", fmt.Errorf("failed to sync renamed file with LSP: %v", err)
+	}
+
 	if fileCount == 0 || changeCount == 0 {
 		return "Failed to rename symbol. 0 occurrences found.", nil
 	}
