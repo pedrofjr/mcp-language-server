@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/lsp"
+	"github.com/isaacphi/mcp-language-server/internal/protocol"
 )
 
 const editFileFakeLSPEnv = "MCP_FAKE_LSP_EDIT_FILE"
@@ -76,6 +77,117 @@ func TestApplyTextEdits_ConvertsFilesystemPathToFileURIBeforeWorkspaceEdit(t *te
 	expectedContent := "updated line\nline two\n"
 	if string(updatedContent) != expectedContent {
 		t.Fatalf("unexpected file content after edit; expected %q, got %q", expectedContent, string(updatedContent))
+	}
+}
+
+func TestApplyTextEdits_AcceptsFileURIInput(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "main.go")
+	initialContent := "line one\nline two\n"
+	if err := os.WriteFile(filePath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("failed to write fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	fileURI := string(protocol.URIFromPath(filePath))
+	_, err = ApplyTextEdits(ctx, client, fileURI, []TextEdit{
+		{
+			StartLine: 1,
+			EndLine:   1,
+			NewText:   "updated line",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected ApplyTextEdits to accept file URI input, got error: %v", err)
+	}
+
+	updatedContent, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read updated file: %v", err)
+	}
+
+	expectedContent := "updated line\nline two\n"
+	if string(updatedContent) != expectedContent {
+		t.Fatalf("unexpected file content after URI edit; expected %q, got %q", expectedContent, string(updatedContent))
+	}
+}
+
+func TestApplyTextEdits_InvalidRangeReturnsErrorAndKeepsOriginalContent(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "main.go")
+	originalContent := "line one\nline two\n"
+	if err := os.WriteFile(filePath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("failed to write fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	_, err = ApplyTextEdits(ctx, client, filePath, []TextEdit{
+		{
+			StartLine: 100000,
+			EndLine:   100000,
+			NewText:   "unexpected mutation",
+		},
+	})
+
+	contentAfterEdit, readErr := os.ReadFile(filePath)
+	if readErr != nil {
+		t.Fatalf("failed to read file after applying invalid range edit: %v", readErr)
+	}
+
+	if string(contentAfterEdit) != originalContent {
+		t.Fatalf("expected original content to remain unchanged for invalid range; expected %q, got %q", originalContent, string(contentAfterEdit))
+	}
+
+	if err == nil {
+		t.Fatalf("expected ApplyTextEdits to return an error for out-of-file range, got nil")
 	}
 }
 

@@ -93,6 +93,29 @@ func safeDocumentURIPath(uri protocol.DocumentUri) (_ string, err error) {
 	return path, nil
 }
 
+func normalizeFilePathOrURI(filePath string) (string, error) {
+	if filePath == "" {
+		return "", fmt.Errorf("file path cannot be empty")
+	}
+
+	uriText := filePath
+	if len(uriText) < len("file://") || !strings.EqualFold(uriText[:len("file://")], "file://") {
+		uriText = string(protocol.URIFromPath(uriText))
+	}
+
+	parsedURI, err := protocol.ParseDocumentUri(uriText)
+	if err != nil {
+		return "", fmt.Errorf("invalid file path or URI %q: %w", filePath, err)
+	}
+
+	path, err := safeDocumentURIPath(parsedURI)
+	if err != nil {
+		return "", fmt.Errorf("invalid file path or URI %q: %w", filePath, err)
+	}
+
+	return path, nil
+}
+
 func containsPosition(r protocol.Range, p protocol.Position) bool {
 	if r.Start.Line > p.Line || r.End.Line < p.Line {
 		return false

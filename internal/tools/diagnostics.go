@@ -21,7 +21,12 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 		}
 	}
 
-	err := client.OpenFile(ctx, filePath)
+	normalizedPath, err := normalizeFilePathOrURI(filePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid file path or URI: %v", err)
+	}
+
+	err = client.OpenFile(ctx, normalizedPath)
 	if err != nil {
 		return "", fmt.Errorf("could not open file: %v", err)
 	}
@@ -31,7 +36,7 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 	time.Sleep(time.Second * 3)
 
 	// Convert the file path to URI format
-	uri := protocol.URIFromPath(filePath)
+	uri := protocol.URIFromPath(normalizedPath)
 
 	// Request fresh diagnostics
 	diagParams := protocol.DocumentDiagnosticParams{
@@ -91,7 +96,7 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 	}
 
 	// Format content with context
-	fileContent, err := os.ReadFile(filePath)
+	fileContent, err := os.ReadFile(normalizedPath)
 	if err != nil {
 		return fileInfo + "\nError reading file: " + err.Error(), nil
 	}

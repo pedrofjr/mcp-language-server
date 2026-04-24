@@ -20,9 +20,9 @@ type TextEdit struct {
 }
 
 func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, edits []TextEdit) (string, error) {
-	err := client.OpenFile(ctx, filePath)
+	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
-		return "", fmt.Errorf("could not open file: %v", err)
+		return "", fmt.Errorf("invalid file path or URI: %v", err)
 	}
 
 	// Create a sorted copy of edits for reporting
@@ -35,16 +35,16 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 	// Track lines added and removed for sorted edits
 	linesRemovedSorted := 0
 	linesAddedSorted := 0
-	for _, edit := range sortedEdits {
+	for _, sortedEdit := range sortedEdits {
 		// Calculate lines removed: end - start + 1
-		removedLineCount := edit.EndLine - edit.StartLine + 1
+		removedLineCount := sortedEdit.EndLine - sortedEdit.StartLine + 1
 		linesRemovedSorted += removedLineCount
 
 		// Calculate lines added: count newlines in the replacement text + 1
 		addedLineCount := 1
-		if edit.NewText != "" {
-			addedLineCount = strings.Count(edit.NewText, "\n") + 1
-		} else if edit.NewText == "" {
+		if sortedEdit.NewText != "" {
+			addedLineCount = strings.Count(sortedEdit.NewText, "\n") + 1
+		} else if sortedEdit.NewText == "" {
 			addedLineCount = 0
 		}
 		linesAddedSorted += addedLineCount
@@ -52,15 +52,17 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 
 	// Sort edits by line number in descending order to process from bottom to top
 	// This way line numbers don't shift under us as we make edits
-	sort.Slice(edits, func(i, j int) bool {
-		return edits[i].StartLine > edits[j].StartLine
+	orderedEdits := make([]TextEdit, len(edits))
+	copy(orderedEdits, edits)
+	sort.Slice(orderedEdits, func(i, j int) bool {
+		return orderedEdits[i].StartLine > orderedEdits[j].StartLine
 	})
 
-	// Convert from input format to protocol.TextEdit
-	var textEdits []protocol.TextEdit
-	for _, edit := range edits {
+	// Validate and convert all ranges before opening/changing the file.
+	textEdits := make([]protocol.TextEdit, 0, len(orderedEdits))
+	for _, requestedEdit := range orderedEdits {
 		// Get the range covering the requested lines
-		rng, err := getRange(edit.StartLine, edit.EndLine, filePath)
+		rng, err := getRange(requestedEdit.StartLine, requestedEdit.EndLine, normalizedPath)
 		if err != nil {
 			return "", fmt.Errorf("invalid position: %v", err)
 		}
@@ -68,13 +70,18 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 		// Always do a replacement
 		textEdits = append(textEdits, protocol.TextEdit{
 			Range:   rng,
-			NewText: edit.NewText,
+			NewText: requestedEdit.NewText,
 		})
+	}
+
+	err = client.OpenFile(ctx, normalizedPath)
+	if err != nil {
+		return "", fmt.Errorf("could not open file: %v", err)
 	}
 
 	edit := protocol.WorkspaceEdit{
 		Changes: map[protocol.DocumentUri][]protocol.TextEdit{
-			protocol.URIFromPath(filePath): textEdits,
+			protocol.URIFromPath(normalizedPath): textEdits,
 		},
 	}
 
@@ -82,7 +89,7 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 		return "", fmt.Errorf("failed to apply text edits: %v", err)
 	}
 
-	if err := client.NotifyChange(ctx, filePath); err != nil {
+	if err := client.NotifyChange(ctx, normalizedPath); err != nil {
 		return "", fmt.Errorf("failed to sync edited file with LSP: %v", err)
 	}
 
@@ -111,37 +118,20 @@ func getRange(startLine, endLine int, filePath string) (protocol.Range, error) {
 	if startLine < 1 {
 		return protocol.Range{}, fmt.Errorf("start line must be >= 1, got %d", startLine)
 	}
+	if endLine < startLine {
+		return protocol.Range{}, fmt.Errorf("end line must be >= start line, got start=%d end=%d", startLine, endLine)
+	}
 
 	// Convert to 0-based line numbers
 	startIdx := startLine - 1
 	endIdx := endLine - 1
 
-	// Handle EOF positioning
 	if startIdx >= len(lines) {
-		// For EOF, we want to point to the end of the last content-bearing line
-		lastContentLineIdx := len(lines) - 1
-		if lastContentLineIdx >= 0 && lines[lastContentLineIdx] == "" {
-			lastContentLineIdx--
-		}
-
-		if lastContentLineIdx < 0 {
-			lastContentLineIdx = 0
-		}
-
-		pos := protocol.Position{
-			Line:      uint32(lastContentLineIdx),
-			Character: uint32(len(lines[lastContentLineIdx])),
-		}
-
-		return protocol.Range{
-			Start: pos,
-			End:   pos,
-		}, nil
+		return protocol.Range{}, fmt.Errorf("start line %d is outside file bounds (max line %d)", startLine, len(lines))
 	}
 
-	// Normal range handling
 	if endIdx >= len(lines) {
-		endIdx = len(lines) - 1
+		return protocol.Range{}, fmt.Errorf("end line %d is outside file bounds (max line %d)", endLine, len(lines))
 	}
 
 	// Always use the full line range for consistency
