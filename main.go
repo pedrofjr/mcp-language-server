@@ -94,14 +94,19 @@ func buildInitializeOptions(initializationOptionsPath string, searchPaths []stri
 	trimmedPath := strings.TrimSpace(initializationOptionsPath)
 
 	if trimmedPath != "" {
-		fileContent, err := os.ReadFile(trimmedPath)
+		resolvedPath, err := filepath.Abs(trimmedPath)
 		if err != nil {
-			return lsp.InitializeOptions{}, fmt.Errorf("failed to read initialization options file %q: %w", trimmedPath, err)
+			return lsp.InitializeOptions{}, fmt.Errorf("failed to resolve initialization options file %q: %w", trimmedPath, err)
 		}
 
-		parsedOptions, err := lsp.ParseInitializeOptionsJSON(fileContent)
+		fileContent, err := os.ReadFile(resolvedPath)
 		if err != nil {
-			return lsp.InitializeOptions{}, fmt.Errorf("failed to parse initialization options file %q: %w", trimmedPath, err)
+			return lsp.InitializeOptions{}, fmt.Errorf("failed to read initialization options file %q: %w", resolvedPath, err)
+		}
+
+		parsedOptions, err := lsp.ParseInitializeOptionsJSONWithBaseDir(fileContent, filepath.Dir(resolvedPath))
+		if err != nil {
+			return lsp.InitializeOptions{}, fmt.Errorf("failed to parse initialization options file %q: %w", resolvedPath, err)
 		}
 
 		options = parsedOptions

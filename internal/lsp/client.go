@@ -138,13 +138,13 @@ func (c *Client) SetInitializationOptions(options InitializeOptions) error {
 }
 
 func (c *Client) buildInitializationOptionsPayload() map[string]any {
-	payload := map[string]any{
-		"codelenses": defaultCodeLensesInitializationOptions(),
-	}
+	payload := make(map[string]any)
 
 	c.initializationOptionsMu.RLock()
 	userOptions := cloneInitializeOptions(c.initializationOptions)
 	c.initializationOptionsMu.RUnlock()
+
+	mergeInitializationExtraFields(payload, userOptions.extraFields)
 
 	if len(userOptions.SearchPaths) > 0 {
 		payload["searchPaths"] = append([]string(nil), userOptions.SearchPaths...)
@@ -157,7 +157,8 @@ func (c *Client) buildInitializationOptionsPayload() map[string]any {
 	if len(userOptions.WorkspaceSettings) > 0 {
 		workspaceSettings := make(map[string]any, len(userOptions.WorkspaceSettings))
 		for root, settings := range userOptions.WorkspaceSettings {
-			settingMap := make(map[string]any, 2)
+			settingMap := make(map[string]any)
+			mergeInitializationExtraFields(settingMap, settings.extraFields)
 			if len(settings.SearchPaths) > 0 {
 				settingMap["searchPaths"] = append([]string(nil), settings.SearchPaths...)
 			}
@@ -175,6 +176,8 @@ func (c *Client) buildInitializationOptionsPayload() map[string]any {
 		}
 	}
 
+	payload["codelenses"] = defaultCodeLensesInitializationOptions()
+
 	return payload
 }
 
@@ -182,6 +185,7 @@ func cloneInitializeOptions(options InitializeOptions) InitializeOptions {
 	cloned := InitializeOptions{
 		SearchPaths:            append([]string(nil), options.SearchPaths...),
 		DelphiInstallationPath: options.DelphiInstallationPath,
+		extraFields:            cloneRawMessages(options.extraFields),
 	}
 
 	if len(options.WorkspaceSettings) > 0 {
@@ -190,11 +194,23 @@ func cloneInitializeOptions(options InitializeOptions) InitializeOptions {
 			cloned.WorkspaceSettings[root] = WorkspaceInitializationOptions{
 				SearchPaths:            append([]string(nil), settings.SearchPaths...),
 				DelphiInstallationPath: settings.DelphiInstallationPath,
+				extraFields:            cloneRawMessages(settings.extraFields),
 			}
 		}
 	}
 
 	return cloned
+}
+
+func mergeInitializationExtraFields(target map[string]any, extraFields map[string]json.RawMessage) {
+	for key, rawValue := range extraFields {
+		var decodedValue any
+		if err := json.Unmarshal(rawValue, &decodedValue); err != nil {
+			continue
+		}
+
+		target[key] = decodedValue
+	}
 }
 
 func defaultCodeLensesInitializationOptions() map[string]bool {
