@@ -191,6 +191,59 @@ func TestApplyTextEdits_InvalidRangeReturnsErrorAndKeepsOriginalContent(t *testi
 	}
 }
 
+func TestApplyTextEdits_CRLFMultilineReplacementInPathWithSpaces_DoesNotInsertBlankLine(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "unit with space.pas")
+	originalContent := "unit Sample;\r\nbegin\r\nend.\r\n"
+	if err := os.WriteFile(filePath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("failed to write CRLF fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	_, err = ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 2,
+		EndLine:   2,
+		NewText:   "begin\r\n  Added;\r\n",
+	}})
+	if err != nil {
+		t.Fatalf("expected ApplyTextEdits to accept CRLF multiline replacement for path with spaces, got error: %v", err)
+	}
+
+	updatedContent, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read updated CRLF fixture file: %v", err)
+	}
+
+	want := "unit Sample;\r\nbegin\r\n  Added;\r\nend.\r\n"
+	if string(updatedContent) != want {
+		t.Fatalf("expected CRLF multiline replacement in path with spaces to avoid blank line and preserve footer; got %q, want %q", string(updatedContent), want)
+	}
+}
+
 func runEditFileFakeLSP(stdin *os.File, stdout *os.File) {
 	reader := bufio.NewReader(stdin)
 	writer := stdout

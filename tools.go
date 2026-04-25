@@ -96,10 +96,10 @@ func (s *mcpServer) registerTools() error {
 	})
 
 	readDefinitionTool := mcp.NewTool("definition",
-		mcp.WithDescription("Read the source code definition of a symbol (function, type, constant, etc.) from the codebase. Returns the complete implementation code where the symbol is defined."),
+		mcp.WithDescription("Read the source code definition of a symbol (function, type, constant, etc.) from the codebase. symbolName can be unqualified, but package/type/unit-qualified names may be required or resolve more precisely depending on the language server."),
 		mcp.WithString("symbolName",
 			mcp.Required(),
-			mcp.Description("The name of the symbol whose definition you want to find (e.g. 'mypackage.MyFunction', 'MyType.MyMethod')"),
+			mcp.Description("The symbol to resolve. Unqualified names often work, but package/type/unit-qualified names can be required or more precise depending on the language server (e.g. 'MyFunction', 'mypackage.MyFunction', 'MyType.MyMethod', 'UnitName.Symbol')."),
 		),
 	)
 
@@ -120,10 +120,10 @@ func (s *mcpServer) registerTools() error {
 	})
 
 	findReferencesTool := mcp.NewTool("references",
-		mcp.WithDescription("Find all usages and references of a symbol throughout the codebase. Returns a list of all files and locations where the symbol appears."),
+		mcp.WithDescription("Find all usages and references of a symbol throughout the codebase. symbolName can be unqualified, but package/type/unit-qualified names may be required or resolve more precisely depending on the language server."),
 		mcp.WithString("symbolName",
 			mcp.Required(),
-			mcp.Description("The name of the symbol to search for (e.g. 'mypackage.MyFunction', 'MyType')"),
+			mcp.Description("The symbol to search for. Unqualified names often work, but package/type/unit-qualified names can be required or more precise depending on the language server (e.g. 'MyFunction', 'mypackage.MyFunction', 'MyType.MyMethod', 'UnitName.Symbol')."),
 		),
 	)
 

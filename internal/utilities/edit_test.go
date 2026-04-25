@@ -669,6 +669,152 @@ func TestApplyTextEdits(t *testing.T) {
 	}
 }
 
+func TestApplyTextEdits_LFFileWithCRLFReplacement_PreservesLFWithoutResidualCarriageReturn(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/unit.pas": []byte("unit Sample;\nbegin\nend.\n"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	err := ApplyTextEdits("file:///test/unit.pas", []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 5},
+		},
+		NewText: "begin\r\n  Added;\r\n",
+	}})
+	if err != nil {
+		t.Fatalf("expected LF file edit with CRLF replacement to succeed, got error: %v", err)
+	}
+
+	got := string(mfs.files["/test/unit.pas"])
+	want := "unit Sample;\nbegin\n  Added;\nend.\n"
+	if got != want {
+		t.Fatalf("expected LF file to preserve LF-only layout without residual carriage returns or blank lines; got %q, want %q", got, want)
+	}
+}
+
+func TestApplyTextEdits_LastLineReplacementWithTrailingLFAtEOF_PreservesRequestedFinalNewline(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/unit.txt": []byte("x"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	err := ApplyTextEdits("file:///test/unit.txt", []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 0},
+			End:   protocol.Position{Line: 0, Character: 1},
+		},
+		NewText: "y\n",
+	}})
+	if err != nil {
+		t.Fatalf("expected trailing-LF replacement at EOF to succeed, got error: %v", err)
+	}
+
+	got := string(mfs.files["/test/unit.txt"])
+	want := "y\n"
+	if got != want {
+		t.Fatalf("expected trailing-LF replacement at EOF to preserve the requested final newline; got %q, want %q", got, want)
+	}
+}
+
+func TestApplyTextEdits_CRLFMultiLineReplacementWithCRLFNewText_DoesNotInsertBlankLine(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/unit.pas": []byte("unit Sample;\r\nbegin\r\nend.\r\n"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	err := ApplyTextEdits("file:///test/unit.pas", []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 5},
+		},
+		NewText: "begin\r\n  Added;\r\n",
+	}})
+	if err != nil {
+		t.Fatalf("expected CRLF multiline replacement to succeed, got error: %v", err)
+	}
+
+	got := string(mfs.files["/test/unit.pas"])
+	want := "unit Sample;\r\nbegin\r\n  Added;\r\nend.\r\n"
+	if got != want {
+		t.Fatalf("expected CRLF multiline replacement to preserve footer without blank line; got %q, want %q", got, want)
+	}
+}
+
+func TestApplyTextEdits_CRLFMultiLineReplacementWithoutTrailingNewline_DoesNotDependOnEmptyFinalFragment(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/unit.pas": []byte("unit Sample;\r\nbegin\r\nend.\r\n"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	err := ApplyTextEdits("file:///test/unit.pas", []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 5},
+		},
+		NewText: "begin\r\n  Added;",
+	}})
+	if err != nil {
+		t.Fatalf("expected CRLF multiline replacement without trailing newline to succeed, got error: %v", err)
+	}
+
+	got := string(mfs.files["/test/unit.pas"])
+	want := "unit Sample;\r\nbegin\r\n  Added;\r\nend.\r\n"
+	if got != want {
+		t.Fatalf("expected CRLF multiline replacement without trailing newline to preserve footer and line endings; got %q, want %q", got, want)
+	}
+}
+
+func TestApplyTextEdits_CRLFMultiLineReplacementWithCRLFNewText_CanBeRevertedWithoutDamagingFooter(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/test/unit.pas": []byte("unit Sample;\r\nbegin\r\nend.\r\n"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	insertEdit := []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 5},
+		},
+		NewText: "begin\r\n  Added;\r\n",
+	}}
+	if err := ApplyTextEdits("file:///test/unit.pas", insertEdit); err != nil {
+		t.Fatalf("expected initial CRLF multiline replacement to succeed, got error: %v", err)
+	}
+
+	revertEdit := []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 2, Character: 8},
+		},
+		NewText: "begin",
+	}}
+	if err := ApplyTextEdits("file:///test/unit.pas", revertEdit); err != nil {
+		t.Fatalf("expected CRLF revert edit to succeed, got error: %v", err)
+	}
+
+	got := string(mfs.files["/test/unit.pas"])
+	want := "unit Sample;\r\nbegin\r\nend.\r\n"
+	if got != want {
+		t.Fatalf("expected CRLF revert to restore original footer and line layout; got %q, want %q", got, want)
+	}
+}
+
 func TestApplyDocumentChange(t *testing.T) {
 	tests := []struct {
 		name       string

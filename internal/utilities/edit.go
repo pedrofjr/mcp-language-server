@@ -177,31 +177,35 @@ func ApplyTextEdit(lines []string, edit protocol.TextEdit, lineEnding string) ([
 			result = append(result, prefix+suffix)
 		}
 	} else {
-		// Split new text into lines
-		newLines := strings.Split(edit.NewText, "\n")
+		newLines, endsWithLineBreak := splitEditNewText(edit.NewText)
+		needsTrailingEmptyLineAtEOF := endsWithLineBreak && suffix == "" && endLine+1 >= len(lines)
 
-		if len(newLines) == 1 {
-			// Single line change
+		if len(newLines) == 1 && !endsWithLineBreak {
 			result = append(result, prefix+newLines[0]+suffix)
-		} else if endLine == startLine {
-			// Multi-line insertion within the same line
-			result = append(result, prefix+newLines[0])
-			if len(newLines) > 2 {
-				result = append(result, newLines[1:len(newLines)-1]...)
-			}
-			result = append(result, newLines[len(newLines)-1]+suffix)
 		} else {
-			// Multi-line change across different lines
 			result = append(result, prefix+newLines[0])
+
 			if len(newLines) > 2 {
 				result = append(result, newLines[1:len(newLines)-1]...)
 			}
-			// Only append the final line with suffix if we're not replacing the entire content
-			if len(suffix) > 0 || endLine < len(lines)-1 {
-				result = append(result, newLines[len(newLines)-1]+suffix)
-			} else {
-				result = append(result, newLines[len(newLines)-1])
+
+			if len(newLines) > 1 {
+				lastLine := newLines[len(newLines)-1]
+				if endsWithLineBreak {
+					result = append(result, lastLine)
+					if suffix != "" {
+						result = append(result, suffix)
+					}
+				} else {
+					result = append(result, lastLine+suffix)
+				}
+			} else if suffix != "" {
+				result = append(result, suffix)
 			}
+		}
+
+		if needsTrailingEmptyLineAtEOF {
+			result = append(result, "")
 		}
 	}
 
@@ -211,6 +215,40 @@ func ApplyTextEdit(lines []string, edit protocol.TextEdit, lineEnding string) ([
 	}
 
 	return result, nil
+}
+
+func splitEditNewText(newText string) ([]string, bool) {
+	lines := make([]string, 0, strings.Count(newText, "\n")+1)
+	start := 0
+	endsWithLineBreak := false
+
+	for i := 0; i < len(newText); i++ {
+		switch newText[i] {
+		case '\r':
+			if i+1 < len(newText) && newText[i+1] == '\n' {
+				continue
+			}
+			lines = append(lines, newText[start:i])
+			start = i + 1
+			endsWithLineBreak = true
+		case '\n':
+			lineEnd := i
+			if i > start && newText[i-1] == '\r' {
+				lineEnd = i - 1
+			}
+			lines = append(lines, newText[start:lineEnd])
+			start = i + 1
+			endsWithLineBreak = true
+		default:
+			endsWithLineBreak = false
+		}
+	}
+
+	if start < len(newText) || !endsWithLineBreak {
+		lines = append(lines, newText[start:])
+	}
+
+	return lines, endsWithLineBreak
 }
 
 // ApplyDocumentChange applies a DocumentChange (create/rename/delete operations)
