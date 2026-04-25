@@ -107,8 +107,9 @@ func buildInitializeOptions(initializationOptionsPath string, searchPaths []stri
 		options = parsedOptions
 	}
 
-	if len(searchPaths) > 0 {
-		options.SearchPaths = append(options.SearchPaths, searchPaths...)
+	expandedSearchPaths := expandCLIFlagSearchPaths(searchPaths)
+	if len(expandedSearchPaths) > 0 {
+		options.SearchPaths = append(options.SearchPaths, expandedSearchPaths...)
 	}
 
 	if strings.TrimSpace(delphiInstallationPath) != "" {
@@ -121,6 +122,23 @@ func buildInitializeOptions(initializationOptionsPath string, searchPaths []stri
 	}
 
 	return normalized, nil
+}
+
+func expandCLIFlagSearchPaths(searchPaths []string) []string {
+	expanded := make([]string, 0, len(searchPaths))
+
+	for _, pathValue := range searchPaths {
+		for _, segment := range strings.Split(pathValue, ";") {
+			trimmedSegment := strings.TrimSpace(segment)
+			if trimmedSegment == "" {
+				continue
+			}
+
+			expanded = append(expanded, trimmedSegment)
+		}
+	}
+
+	return expanded
 }
 
 func newServer(config *config) (*mcpServer, error) {

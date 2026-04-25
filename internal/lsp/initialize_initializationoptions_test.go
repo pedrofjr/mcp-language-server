@@ -184,6 +184,51 @@ func TestInitializeLSPClient_NormalizesEmptyEntries(t *testing.T) {
 	}
 }
 
+func TestInitializeLSPClient_SendsInitializationOptions_WhenFlagsExpandedFromSemicolon(t *testing.T) {
+	// This test ensures the client sends an array payload to the LSP even when
+	// the original MCP flags would have been expanded from a semicolon-separated value.
+	workspaceDir := `C:\Users\dave\repo`
+	inputOptions := InitializeOptions{
+		SearchPaths: []string{"src", "lib", "vendor"},
+	}
+
+	expected := map[string]any{
+		"searchPaths": []string{"src", "lib", "vendor"},
+		"codelenses":  defaultCodeLensesInitializationOptions(),
+	}
+	b, _ := json.Marshal(expected)
+
+	t.Setenv(initOptionsFakeLSPEnv, "1")
+	t.Setenv(initOptionsExpectedJSONEnv, string(b))
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := NewClient(execPath, "-test.run=TestHelperProcessInitializeInitOptionsFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := client.SetInitializationOptions(inputOptions); err != nil {
+		t.Fatalf("expected SetInitializationOptions to accept options, got error: %v", err)
+	}
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("expected InitializeLSPClient to send initializationOptions, got error: %v", err)
+	}
+}
+
 // Fake LSP implementation that inspects the initialize params and validates
 // the presence and shape of initializationOptions according to expectations
 func runInitializeInitOptionsFakeLSP(stdin *os.File, stdout *os.File) {
@@ -226,7 +271,11 @@ func runInitializeInitOptionsFakeLSP(stdin *os.File, stdout *os.File) {
 				continue
 			}
 
-			initOpts := initOptsRaw.(map[string]any)
+			initOpts, ok := initOptsRaw.(map[string]any)
+			if !ok {
+				sendInitOptionsFakeResponse(writer, msg.ID, nil, &ResponseError{Code: -32602, Message: "initializationOptions must be object"})
+				continue
+			}
 
 			// compare against expected if provided
 			if expected != nil {
