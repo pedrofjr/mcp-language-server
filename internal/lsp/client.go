@@ -27,6 +27,10 @@ type Client struct {
 	capabilities   protocol.ServerCapabilities
 	capabilitiesMu sync.RWMutex
 
+	// initializationOptions contains user-configurable initialize payload fields.
+	initializationOptions   InitializeOptions
+	initializationOptionsMu sync.RWMutex
+
 	// Request ID counter
 	nextID atomic.Int32
 
@@ -118,8 +122,96 @@ func (c *Client) RegisterServerRequestHandler(method string, handler ServerReque
 	c.serverRequestHandlers[method] = handler
 }
 
+// SetInitializationOptions stores normalized initializationOptions payload fields
+// that will be merged into initialize.initializationOptions.
+func (c *Client) SetInitializationOptions(options InitializeOptions) error {
+	normalized, err := NormalizeInitializeOptions(options)
+	if err != nil {
+		return err
+	}
+
+	c.initializationOptionsMu.Lock()
+	c.initializationOptions = cloneInitializeOptions(normalized)
+	c.initializationOptionsMu.Unlock()
+
+	return nil
+}
+
+func (c *Client) buildInitializationOptionsPayload() map[string]any {
+	payload := map[string]any{
+		"codelenses": defaultCodeLensesInitializationOptions(),
+	}
+
+	c.initializationOptionsMu.RLock()
+	userOptions := cloneInitializeOptions(c.initializationOptions)
+	c.initializationOptionsMu.RUnlock()
+
+	if len(userOptions.SearchPaths) > 0 {
+		payload["searchPaths"] = append([]string(nil), userOptions.SearchPaths...)
+	}
+
+	if userOptions.DelphiInstallationPath != "" {
+		payload["delphiInstallationPath"] = userOptions.DelphiInstallationPath
+	}
+
+	if len(userOptions.WorkspaceSettings) > 0 {
+		workspaceSettings := make(map[string]any, len(userOptions.WorkspaceSettings))
+		for root, settings := range userOptions.WorkspaceSettings {
+			settingMap := make(map[string]any, 2)
+			if len(settings.SearchPaths) > 0 {
+				settingMap["searchPaths"] = append([]string(nil), settings.SearchPaths...)
+			}
+			if settings.DelphiInstallationPath != "" {
+				settingMap["delphiInstallationPath"] = settings.DelphiInstallationPath
+			}
+			if len(settingMap) == 0 {
+				continue
+			}
+			workspaceSettings[root] = settingMap
+		}
+
+		if len(workspaceSettings) > 0 {
+			payload["workspaceSettings"] = workspaceSettings
+		}
+	}
+
+	return payload
+}
+
+func cloneInitializeOptions(options InitializeOptions) InitializeOptions {
+	cloned := InitializeOptions{
+		SearchPaths:            append([]string(nil), options.SearchPaths...),
+		DelphiInstallationPath: options.DelphiInstallationPath,
+	}
+
+	if len(options.WorkspaceSettings) > 0 {
+		cloned.WorkspaceSettings = make(map[string]WorkspaceInitializationOptions, len(options.WorkspaceSettings))
+		for root, settings := range options.WorkspaceSettings {
+			cloned.WorkspaceSettings[root] = WorkspaceInitializationOptions{
+				SearchPaths:            append([]string(nil), settings.SearchPaths...),
+				DelphiInstallationPath: settings.DelphiInstallationPath,
+			}
+		}
+	}
+
+	return cloned
+}
+
+func defaultCodeLensesInitializationOptions() map[string]bool {
+	return map[string]bool{
+		"generate":           true,
+		"regenerate_cgo":     true,
+		"test":               true,
+		"tidy":               true,
+		"upgrade_dependency": true,
+		"vendor":             true,
+		"vulncheck":          false,
+	}
+}
+
 func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (*protocol.InitializeResult, error) {
 	workspaceURI := protocol.URIFromPath(workspaceDir)
+	initializationOptions := c.buildInitializationOptionsPayload()
 
 	initParams := &protocol.InitializeParams{
 		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
@@ -184,17 +276,7 @@ func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (
 				},
 				Window: protocol.WindowClientCapabilities{},
 			},
-			InitializationOptions: map[string]any{
-				"codelenses": map[string]bool{
-					"generate":           true,
-					"regenerate_cgo":     true,
-					"test":               true,
-					"tidy":               true,
-					"upgrade_dependency": true,
-					"vendor":             true,
-					"vulncheck":          false,
-				},
-			},
+			InitializationOptions: initializationOptions,
 		},
 	}
 
@@ -296,9 +378,19 @@ func (c *Client) Close() error {
 
 	// Force kill the LSP process if it doesn't exit within timeout
 	forcedKill := make(chan struct{})
+	var closeForcedKillOnce sync.Once
+	closeForcedKill := func() {
+		closeForcedKillOnce.Do(func() {
+			close(forcedKill)
+		})
+	}
+
 	go func() {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+
 		select {
-		case <-time.After(2 * time.Second):
+		case <-timer.C:
 			lspLogger.Warn("LSP process did not exit within timeout, forcing kill")
 			if c.Cmd.Process != nil {
 				if err := c.Cmd.Process.Kill(); err != nil {
@@ -307,7 +399,7 @@ func (c *Client) Close() error {
 					lspLogger.Info("Process killed successfully")
 				}
 			}
-			close(forcedKill)
+			closeForcedKill()
 		case <-forcedKill:
 			// Channel closed from completion path
 			return
@@ -321,7 +413,7 @@ func (c *Client) Close() error {
 
 	// Wait for process to exit
 	err := c.Cmd.Wait()
-	close(forcedKill) // Stop the force kill goroutine
+	closeForcedKill() // Stop the force kill goroutine
 
 	return err
 }

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,9 +22,10 @@ import (
 var coreLogger = logging.NewLogger(logging.Core)
 
 type config struct {
-	workspaceDir string
-	lspCommand   string
-	lspArgs      []string
+	workspaceDir          string
+	lspCommand            string
+	lspArgs               []string
+	initializationOptions lsp.InitializeOptions
 }
 
 type mcpServer struct {
@@ -37,8 +39,18 @@ type mcpServer struct {
 
 func parseConfig() (*config, error) {
 	cfg := &config{}
+	var searchPaths []string
+	var delphiInstallationPath string
+	var initializationOptionsPath string
+
 	flag.StringVar(&cfg.workspaceDir, "workspace", "", "Path to workspace directory")
 	flag.StringVar(&cfg.lspCommand, "lsp", "", "LSP command to run (args should be passed after --)")
+	flag.Func("search-path", "Global search path for initialize.initializationOptions.searchPaths (repeatable)", func(value string) error {
+		searchPaths = append(searchPaths, value)
+		return nil
+	})
+	flag.StringVar(&delphiInstallationPath, "delphi-installation-path", "", "Global Delphi installation root for initialize.initializationOptions.delphiInstallationPath")
+	flag.StringVar(&initializationOptionsPath, "initialization-options", "", "Path to a JSON file for initialize.initializationOptions")
 	flag.Parse()
 
 	// Get remaining args after -- as LSP arguments
@@ -68,7 +80,47 @@ func parseConfig() (*config, error) {
 		return nil, fmt.Errorf("LSP command not found: %s", cfg.lspCommand)
 	}
 
+	initializationOptions, err := buildInitializeOptions(initializationOptionsPath, searchPaths, delphiInstallationPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg.initializationOptions = initializationOptions
+
 	return cfg, nil
+}
+
+func buildInitializeOptions(initializationOptionsPath string, searchPaths []string, delphiInstallationPath string) (lsp.InitializeOptions, error) {
+	options := lsp.InitializeOptions{}
+	trimmedPath := strings.TrimSpace(initializationOptionsPath)
+
+	if trimmedPath != "" {
+		fileContent, err := os.ReadFile(trimmedPath)
+		if err != nil {
+			return lsp.InitializeOptions{}, fmt.Errorf("failed to read initialization options file %q: %w", trimmedPath, err)
+		}
+
+		parsedOptions, err := lsp.ParseInitializeOptionsJSON(fileContent)
+		if err != nil {
+			return lsp.InitializeOptions{}, fmt.Errorf("failed to parse initialization options file %q: %w", trimmedPath, err)
+		}
+
+		options = parsedOptions
+	}
+
+	if len(searchPaths) > 0 {
+		options.SearchPaths = append(options.SearchPaths, searchPaths...)
+	}
+
+	if strings.TrimSpace(delphiInstallationPath) != "" {
+		options.DelphiInstallationPath = delphiInstallationPath
+	}
+
+	normalized, err := lsp.NormalizeInitializeOptions(options)
+	if err != nil {
+		return lsp.InitializeOptions{}, fmt.Errorf("invalid initialization options: %w", err)
+	}
+
+	return normalized, nil
 }
 
 func newServer(config *config) (*mcpServer, error) {
@@ -97,6 +149,11 @@ func (s *mcpServer) initializeLSP() error {
 	if err != nil {
 		return fmt.Errorf("failed to create LSP client: %v", err)
 	}
+
+	if err := client.SetInitializationOptions(s.config.initializationOptions); err != nil {
+		return fmt.Errorf("failed to set initialization options: %v", err)
+	}
+
 	s.lspClient = client
 	s.workspaceWatcher = watcher.NewWorkspaceWatcher(client)
 
