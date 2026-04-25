@@ -18,10 +18,15 @@ import (
 )
 
 type Client struct {
-	Cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	stderr io.ReadCloser
+	Cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  *bufio.Reader
+	stderr  io.ReadCloser
+	writeMu sync.Mutex
+
+	transportErr     error
+	transportErrMu   sync.RWMutex
+	transportErrOnce sync.Once
 
 	// Capabilities returned by server initialize response.
 	capabilities   protocol.ServerCapabilities
@@ -422,8 +427,8 @@ func (c *Client) Close() error {
 		}
 	}()
 
-	// Close stdin to signal the server
-	if err := c.stdin.Close(); err != nil {
+	// Close stdin to signal the server without interleaving with an in-flight frame write.
+	if err := c.closeStdin(); err != nil {
 		lspLogger.Error("Failed to close stdin: %v", err)
 	}
 

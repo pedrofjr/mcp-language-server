@@ -42,6 +42,65 @@ func WriteMessage(w io.Writer, msg *Message) error {
 	return nil
 }
 
+func (c *Client) sendMessage(msg *Message) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if err := c.transportError(); err != nil {
+		return err
+	}
+
+	if c.stdin == nil {
+		return io.ErrClosedPipe
+	}
+
+	return WriteMessage(c.stdin, msg)
+}
+
+func (c *Client) recordTransportFailure(err error) {
+	if err == nil {
+		return
+	}
+
+	transportErr := fmt.Errorf("lsp transport failed: %w", err)
+
+	c.transportErrOnce.Do(func() {
+		c.transportErrMu.Lock()
+		c.transportErr = transportErr
+		c.transportErrMu.Unlock()
+
+		c.handlersMu.Lock()
+		pending := make([]chan *Message, 0, len(c.handlers))
+		for id, ch := range c.handlers {
+			pending = append(pending, ch)
+			delete(c.handlers, id)
+		}
+		c.handlersMu.Unlock()
+
+		for _, ch := range pending {
+			close(ch)
+		}
+	})
+}
+
+func (c *Client) transportError() error {
+	c.transportErrMu.RLock()
+	defer c.transportErrMu.RUnlock()
+
+	return c.transportErr
+}
+
+func (c *Client) closeStdin() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if c.stdin == nil {
+		return nil
+	}
+
+	return c.stdin.Close()
+}
+
 // ReadMessage reads a single LSP message from the given reader
 func ReadMessage(r *bufio.Reader) (*Message, error) {
 	// Read headers
@@ -105,6 +164,7 @@ func (c *Client) handleMessages() {
 			} else {
 				lspLogger.Error("Error reading message: %v", err)
 			}
+			c.recordTransportFailure(err)
 			return
 		}
 
@@ -150,7 +210,7 @@ func (c *Client) handleMessages() {
 			}
 
 			// Send response back to server
-			if err := WriteMessage(c.stdin, response); err != nil {
+			if err := c.sendMessage(response); err != nil {
 				lspLogger.Error("Error sending response to server: %v", err)
 			}
 
@@ -176,9 +236,12 @@ func (c *Client) handleMessages() {
 		if msg.ID != nil && msg.ID.Value != nil && msg.Method == "" {
 			// Convert ID to string for map lookup
 			idStr := msg.ID.String()
-			c.handlersMu.RLock()
+			c.handlersMu.Lock()
 			ch, ok := c.handlers[idStr]
-			c.handlersMu.RUnlock()
+			if ok {
+				delete(c.handlers, idStr)
+			}
+			c.handlersMu.Unlock()
 
 			if ok {
 				lspLogger.Debug("Sending response for ID %v to handler", msg.ID)
@@ -193,6 +256,10 @@ func (c *Client) handleMessages() {
 
 // Call makes a request and waits for the response
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
+	if err := c.transportError(); err != nil {
+		return err
+	}
+
 	id := c.nextID.Add(1)
 
 	lspLogger.Debug("Making call: method=%s id=%v", method, id)
@@ -217,14 +284,25 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	}()
 
 	// Send request
-	if err := WriteMessage(c.stdin, msg); err != nil {
+	if err := c.sendMessage(msg); err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
 	lspLogger.Debug("Waiting for response to request ID: %v", msg.ID)
 
-	// Wait for response
-	resp := <-ch
+	// Wait for response while still respecting caller cancellation.
+	var resp *Message
+	select {
+	case resp = <-ch:
+		if resp == nil {
+			if err := c.transportError(); err != nil {
+				return err
+			}
+			return fmt.Errorf("request ended without response for ID: %v", msg.ID)
+		}
+	case <-ctx.Done():
+		return fmt.Errorf("request canceled while waiting for response: %w", ctx.Err())
+	}
 
 	lspLogger.Debug("Received response for request ID: %v", msg.ID)
 
@@ -258,7 +336,7 @@ func (c *Client) Notify(ctx context.Context, method string, params any) error {
 		return fmt.Errorf("failed to create notification: %w", err)
 	}
 
-	if err := WriteMessage(c.stdin, msg); err != nil {
+	if err := c.sendMessage(msg); err != nil {
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
 
