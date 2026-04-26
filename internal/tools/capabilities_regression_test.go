@@ -22,6 +22,7 @@ const capabilitiesRegressionDocSymbolErrorURIEnv = "MCP_FAKE_LSP_CAPABILITIES_DO
 const capabilitiesRegressionQualifiedContainerSymbolEnv = "MCP_FAKE_LSP_CAPABILITIES_QUALIFIED_CONTAINER_SYMBOL"
 const capabilitiesRegressionQualifiedReferenceOwnerEnv = "MCP_FAKE_LSP_CAPABILITIES_QUALIFIED_REFERENCE_OWNER_SYMBOL"
 const capabilitiesRegressionReferencesRetryEnv = "MCP_FAKE_LSP_CAPABILITIES_REFERENCES_RETRY"
+const capabilitiesRegressionReferencesLastResortEnv = "MCP_FAKE_LSP_CAPABILITIES_REFERENCES_LAST_RESORT"
 
 func TestHelperProcessCapabilitiesRegressionFakeLSP(t *testing.T) {
 	if os.Getenv(capabilitiesRegressionFakeLSPEnv) != "1" {
@@ -361,6 +362,149 @@ func TestCapabilitiesRegression_FindReferences_RetriesOpenFileTextCandidateWhenW
 	}
 }
 
+func TestCapabilitiesRegression_FindReferences_LastResortStaysEmptyWhenOnlyProviderDeclarationIsOpen(t *testing.T) {
+	t.Setenv(capabilitiesRegressionReferencesLastResortEnv, "1")
+
+	fixtures := map[string]string{
+		"uHighlighterProcs.pas": strings.Join([]string{
+			"unit uHighlighterProcs;",
+			"",
+			"function GetHighlightersFilter(const Highlighters: string): string;",
+			"begin",
+			"  Result := Highlighters;",
+			"end;",
+			"",
+		}, "\n"),
+		"EditU2.pas": strings.Join([]string{
+			"unit EditU2;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  s: string;",
+			"begin",
+			"  s := 'no consumers here';",
+			"end;",
+			"",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupCapabilitiesRegressionFakeClientWithFixtures(t, false, true, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := client.OpenFile(ctx, filePaths["uHighlighterProcs.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture de declaracao para ultimo recurso textual de references: %v", err)
+	}
+
+	if err := client.OpenFile(ctx, filePaths["EditU2.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture sem ocorrencias consumidoras para ultimo recurso textual de references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "GetHighlightersFilter")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar no cenario sem ocorrencias consumidoras abertas: %v", err)
+	}
+
+	if !strings.Contains(result, "No references found for symbol: GetHighlightersFilter") {
+		t.Fatalf("sem ocorrencias consumidoras abertas, FindReferences deve continuar vazio; obtido: %s", result)
+	}
+
+	if strings.Contains(result, filePaths["uHighlighterProcs.pas"]) {
+		t.Fatalf("FindReferences nao pode passar devolvendo apenas a declaracao textual do provider em %s; obtido: %s", filePaths["uHighlighterProcs.pas"], result)
+	}
+
+	referenceURIs, err := fakeLSPReferenceURIs(ctx, client)
+	if err != nil {
+		t.Fatalf("falha ao obter URIs de textDocument/references do fake LSP: %v", err)
+	}
+
+	if len(referenceURIs) != 1 {
+		t.Fatalf("sem candidatos textuais consumidores, esperado apenas a tentativa de references na declaracao do provider; chamadas observadas: %v", referenceURIs)
+	}
+
+	if referenceURIs[0] != string(protocol.URIFromPath(filePaths["uHighlighterProcs.pas"])) {
+		t.Fatalf("esperado unica chamada de references na declaracao de uHighlighterProcs.pas; chamadas observadas: %v", referenceURIs)
+	}
+}
+
+func TestCapabilitiesRegression_FindReferences_LastResortReturnsTextualOccurrenceWhenReferencesStayEmpty(t *testing.T) {
+	t.Setenv(capabilitiesRegressionReferencesLastResortEnv, "1")
+
+	fixtures := map[string]string{
+		"uHighlighterProcs.pas": strings.Join([]string{
+			"unit uHighlighterProcs;",
+			"",
+			"function GetHighlightersFilter(const Highlighters: string): string;",
+			"begin",
+			"  Result := Highlighters;",
+			"end;",
+			"",
+		}, "\n"),
+		"EditU2.pas": strings.Join([]string{
+			"unit EditU2;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  s: string;",
+			"  fHighlighters: string;",
+			"begin",
+			"  s := GetHighlightersFilter(fHighlighters);",
+			"end;",
+			"",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupCapabilitiesRegressionFakeClientWithFixtures(t, false, true, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := client.OpenFile(ctx, filePaths["uHighlighterProcs.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture de declaracao para ultimo recurso textual de references: %v", err)
+	}
+
+	if err := client.OpenFile(ctx, filePaths["EditU2.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture consumidora para ultimo recurso textual de references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "GetHighlightersFilter")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar no cenario de ultimo recurso textual: %v", err)
+	}
+
+	if strings.Contains(result, "No references found") {
+		t.Fatalf("esperado ultimo recurso textual quando textDocument/references retorna vazio ate no retry; obtido: %s", result)
+	}
+
+	if !strings.Contains(result, filePaths["EditU2.pas"]) {
+		t.Fatalf("esperado ultimo recurso textual incluir a ocorrencia em %s; obtido: %s", filePaths["EditU2.pas"], result)
+	}
+
+	if !strings.Contains(result, "s := GetHighlightersFilter(fHighlighters);") {
+		t.Fatalf("esperado ultimo recurso textual incluir a linha consumidora em EditU2.pas; obtido: %s", result)
+	}
+
+	referenceURIs, err := fakeLSPReferenceURIs(ctx, client)
+	if err != nil {
+		t.Fatalf("falha ao obter URIs de textDocument/references do fake LSP: %v", err)
+	}
+
+	if len(referenceURIs) < 2 {
+		t.Fatalf("esperado ao menos duas chamadas a textDocument/references (declaracao e retry textual vazio), observadas: %v", referenceURIs)
+	}
+
+	if referenceURIs[0] != string(protocol.URIFromPath(filePaths["uHighlighterProcs.pas"])) {
+		t.Fatalf("esperado primeira chamada de references na declaracao de uHighlighterProcs.pas; chamadas observadas: %v", referenceURIs)
+	}
+
+	if referenceURIs[1] != string(protocol.URIFromPath(filePaths["EditU2.pas"])) {
+		t.Fatalf("esperado segunda chamada de references no candidato textual EditU2.pas; chamadas observadas: %v", referenceURIs)
+	}
+}
+
 func TestCapabilitiesRegression_FindReferences_QualifiedQuerySelectsWorkspaceSymbolByContainerName(t *testing.T) {
 	t.Setenv(capabilitiesRegressionQualifiedReferenceOwnerEnv, "1")
 
@@ -531,6 +675,7 @@ func runCapabilitiesRegressionFakeLSP(stdin *os.File, stdout *os.File) {
 	qualifiedContainerSymbol := os.Getenv(capabilitiesRegressionQualifiedContainerSymbolEnv) == "1"
 	qualifiedReferenceOwner := os.Getenv(capabilitiesRegressionQualifiedReferenceOwnerEnv) == "1"
 	referencesRetryScenario := os.Getenv(capabilitiesRegressionReferencesRetryEnv) == "1"
+	referencesLastResortScenario := os.Getenv(capabilitiesRegressionReferencesLastResortEnv) == "1"
 
 	for {
 		msg, err := lsp.ReadMessage(reader)
@@ -601,6 +746,25 @@ func runCapabilitiesRegressionFakeLSP(stdin *os.File, stdout *os.File) {
 				Query string `json:"query"`
 			}
 			_ = json.Unmarshal(msg.Params, &params)
+
+			if referencesLastResortScenario && params.Query == "GetHighlightersFilter" {
+				declarationURI := findCapabilitiesRegressionOpenedURIBySuffix(openedURIs, "uHighlighterProcs.pas")
+				result := []map[string]any{
+					{
+						"name": "GetHighlightersFilter",
+						"kind": 12,
+						"location": map[string]any{
+							"uri": declarationURI,
+							"range": map[string]any{
+								"start": map[string]any{"line": 2, "character": 9},
+								"end":   map[string]any{"line": 2, "character": 30},
+							},
+						},
+					},
+				}
+				sendCapabilitiesRegressionFakeResponse(writer, msg.ID, result, nil)
+				continue
+			}
 
 			if referencesRetryScenario && params.Query == "GetHighlightersFilter" {
 				declarationURI := findCapabilitiesRegressionOpenedURIBySuffix(openedURIs, "uHighlighterProcs.pas")
@@ -729,6 +893,11 @@ func runCapabilitiesRegressionFakeLSP(stdin *os.File, stdout *os.File) {
 				uri = openedURI
 			}
 			referenceURIs = append(referenceURIs, uri)
+
+			if referencesLastResortScenario {
+				sendCapabilitiesRegressionFakeResponse(writer, msg.ID, []map[string]any{}, nil)
+				continue
+			}
 
 			if referencesRetryScenario {
 				declarationURI := findCapabilitiesRegressionOpenedURIBySuffix(openedURIs, "uHighlighterProcs.pas")

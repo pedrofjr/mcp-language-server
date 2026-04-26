@@ -62,6 +62,15 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	if len(allReferences) == 0 {
+		referenceBlocks, err := collectLastResortOpenFileReferenceBlocks(ctx, client, symbolName, symbolLocations, contextLines)
+		if err != nil {
+			return "", err
+		}
+
+		allReferences = append(allReferences, referenceBlocks...)
+	}
+
+	if len(allReferences) == 0 {
 		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
 	}
 
@@ -148,6 +157,11 @@ func collectReferenceBlocks(ctx context.Context, client *lsp.Client, loc protoco
 		return nil, fmt.Errorf("failed to get references: %v", err)
 	}
 
+	return formatReferenceBlocks(ctx, client, refs, contextLines)
+}
+
+func formatReferenceBlocks(ctx context.Context, client *lsp.Client, refs []protocol.Location, contextLines int) ([]string, error) {
+
 	refsByFile := make(map[protocol.DocumentUri][]protocol.Location)
 	for _, ref := range refs {
 		refsByFile[ref.URI] = append(refsByFile[ref.URI], ref)
@@ -206,6 +220,48 @@ func collectReferenceBlocks(ctx context.Context, client *lsp.Client, loc protoco
 	}
 
 	return allReferences, nil
+}
+
+func collectLastResortOpenFileReferenceBlocks(ctx context.Context, client *lsp.Client, symbolName string, symbolLocations []protocol.Location, contextLines int) ([]string, error) {
+	textualLocations := collectLastResortOpenFileReferenceLocations(client, symbolName, symbolLocations)
+	if len(textualLocations) == 0 {
+		return nil, nil
+	}
+
+	return formatReferenceBlocks(ctx, client, textualLocations, contextLines)
+}
+
+func collectLastResortOpenFileReferenceLocations(client *lsp.Client, symbolName string, symbolLocations []protocol.Location) []protocol.Location {
+	searchPatterns := buildSymbolSearchPatterns(symbolName)
+	if len(searchPatterns) == 0 {
+		return nil
+	}
+
+	declarationLines := make(map[string]struct{}, len(symbolLocations))
+	for _, loc := range symbolLocations {
+		declarationLines[referenceLineKey(loc)] = struct{}{}
+	}
+
+	openFiles := client.GetOpenFilesSnapshot()
+	sort.Strings(openFiles)
+
+	locations := make([]protocol.Location, 0, len(openFiles))
+	for _, uriStr := range openFiles {
+		path, ok := uriPathFromString(uriStr)
+		if !ok {
+			continue
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(content), "\n")
+		locations = append(locations, findOpenFileTextualReferenceLocations(protocol.DocumentUri(uriStr), lines, searchPatterns, declarationLines)...)
+	}
+
+	return locations
 }
 
 func collectOpenFileReferenceRetryLocations(client *lsp.Client, symbolName string, attemptedLocations map[string]struct{}) []protocol.Location {
@@ -267,6 +323,43 @@ func findOpenFileReferenceRetryLocation(uri protocol.DocumentUri, lines []string
 	return protocol.Location{}, false
 }
 
+func findOpenFileTextualReferenceLocations(uri protocol.DocumentUri, lines []string, searchPatterns []*regexp.Regexp, declarationLines map[string]struct{}) []protocol.Location {
+	locations := make([]protocol.Location, 0)
+	seenLocations := make(map[string]struct{})
+
+	for lineIndex, line := range lines {
+		searchLine := trimSingleLineComment(line)
+		_, declarationLine := declarationLines[referenceLineKeyForURI(uri, lineIndex)]
+
+		for _, pattern := range searchPatterns {
+			matchRanges := pattern.FindAllStringIndex(searchLine, -1)
+			for _, matchRange := range matchRanges {
+				if declarationLine && scorePotentialDeclarationLine(searchLine) > 0 {
+					continue
+				}
+
+				candidate := protocol.Location{
+					URI: uri,
+					Range: protocol.Range{
+						Start: protocol.Position{Line: uint32(lineIndex), Character: uint32(matchRange[0])},
+						End:   protocol.Position{Line: uint32(lineIndex), Character: uint32(matchRange[1])},
+					},
+				}
+
+				locationKey := referenceLocationKey(candidate)
+				if _, seen := seenLocations[locationKey]; seen {
+					continue
+				}
+
+				seenLocations[locationKey] = struct{}{}
+				locations = append(locations, candidate)
+			}
+		}
+	}
+
+	return locations
+}
+
 func referenceLocationKey(loc protocol.Location) string {
 	return fmt.Sprintf("%s:%d:%d:%d:%d",
 		loc.URI,
@@ -275,4 +368,12 @@ func referenceLocationKey(loc protocol.Location) string {
 		loc.Range.End.Line,
 		loc.Range.End.Character,
 	)
+}
+
+func referenceLineKey(loc protocol.Location) string {
+	return referenceLineKeyForURI(loc.URI, int(loc.Range.Start.Line))
+}
+
+func referenceLineKeyForURI(uri protocol.DocumentUri, line int) string {
+	return fmt.Sprintf("%s:%d", uri, line)
 }
