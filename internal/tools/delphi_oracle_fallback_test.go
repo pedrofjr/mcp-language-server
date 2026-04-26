@@ -15,7 +15,11 @@ import (
 	"github.com/isaacphi/mcp-language-server/internal/protocol"
 )
 
-const fakeLSPEnv = "MCP_FAKE_LSP_DELPHI_ORACLE"
+const (
+	fakeLSPEnv                         = "MCP_FAKE_LSP_DELPHI_ORACLE"
+	fakeLSPWorkspaceSymbolProviderEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_PROVIDER"
+	fakeLSPWorkspaceSymbolEmptyEnv    = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_EMPTY_RESULT"
+)
 
 func TestHelperProcessDelphiOracleFakeLSP(t *testing.T) {
 	if os.Getenv(fakeLSPEnv) != "1" {
@@ -47,6 +51,42 @@ func TestDelphiOracle_ReadDefinition_FallbackWhenWorkspaceSymbolUnavailable(t *t
 	}
 }
 
+func TestDelphiOracle_InferSymbolLocationFromOpenFiles_QualifiedCreatePrefersOwnedDeclarationOverIrrelevantUse(t *testing.T) {
+	fixtures := map[string]string{
+		"main.pas": strings.Join([]string{
+			"procedure Demo;",
+			"begin",
+			"  TOther.Create;",
+			"end;",
+			"",
+			"constructor TTarget.Create;",
+			"begin",
+			"end;",
+			"",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := client.OpenFile(ctx, filePaths["main.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture para fallback qualificado: %v", err)
+	}
+
+	location, found := inferSymbolLocationFromOpenFiles(client, "TTarget.Create")
+	if !found {
+		t.Fatal("esperado localizar TTarget.Create em arquivo aberto, mas nenhum candidato foi encontrado")
+	}
+
+	const expectedLine = 6
+	if gotLine := int(location.Range.Start.Line) + 1; gotLine != expectedLine {
+		t.Fatalf("esperado fallback localizar a declaracao qualificada TTarget.Create na linha %d, mas escolheu L%d:C%d", expectedLine, gotLine, location.Range.Start.Character+1)
+	}
+}
+
 func TestDelphiOracle_FindReferences_FallbackWhenWorkspaceSymbolUnavailable(t *testing.T) {
 	client, filePath, cleanup := setupDelphiOracleFakeClient(t)
 	defer cleanup()
@@ -65,6 +105,121 @@ func TestDelphiOracle_FindReferences_FallbackWhenWorkspaceSymbolUnavailable(t *t
 
 	if !strings.Contains(result, "References in File") {
 		t.Fatalf("esperado resultado de references com bloco de arquivo, obtido: %s", result)
+	}
+}
+
+func TestDelphiOracle_FindReferences_SimpleSquareInOpenUnit_ReturnsNonEmptyResult(t *testing.T) {
+	fixtures := map[string]string{
+		"math_unit.pas": strings.Join([]string{
+			"unit MathUnit;",
+			"",
+			"interface",
+			"",
+			"function square(Value: Integer): Integer;",
+			"",
+			"implementation",
+			"",
+			"function square(Value: Integer): Integer;",
+			"begin",
+			"  Result := Value * Value;",
+			"end;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  Current: Integer;",
+			"begin",
+			"  Current := square(3);",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["math_unit.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir unit Delphi com square para references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "square")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar para simbolo simples square em unit Delphi aberta: %v", err)
+	}
+
+	if strings.Contains(result, "No references found") {
+		t.Fatalf("esperado references nao vazio para simbolo simples square em unit Delphi aberta; resultado: %s", result)
+	}
+
+	if !strings.Contains(result, "References in File") {
+		t.Fatalf("esperado bloco de arquivo no resultado de references para square; obtido: %s", result)
+	}
+
+	if !strings.Contains(result, filePath) {
+		t.Fatalf("esperado references apontar para a unit Delphi aberta %s; obtido: %s", filePath, result)
+	}
+}
+
+func TestDelphiOracle_FindReferences_SimpleSquareInOpenUnit_FallsBackWhenWorkspaceSymbolReturnsEmpty(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolEmptyEnv, "1")
+
+	fixtures := map[string]string{
+		"math_unit.pas": strings.Join([]string{
+			"unit MathUnit;",
+			"",
+			"interface",
+			"",
+			"function square(Value: Integer): Integer;",
+			"",
+			"implementation",
+			"",
+			"function square(Value: Integer): Integer;",
+			"begin",
+			"  Result := Value * Value;",
+			"end;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  Current: Integer;",
+			"begin",
+			"  Current := square(3);",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["math_unit.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir unit Delphi com square para fallback de references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "square")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar quando workspace/symbol retorna vazio para square: %v", err)
+	}
+
+	if strings.Contains(result, "No references found") {
+		t.Fatalf("esperado fallback por arquivo aberto quando workspace/symbol retorna vazio para square; resultado: %s", result)
+	}
+
+	if !strings.Contains(result, "References in File") {
+		t.Fatalf("esperado bloco de arquivo apos fallback de references para square; obtido: %s", result)
+	}
+
+	if !strings.Contains(result, filePath) {
+		t.Fatalf("esperado references apontar para a unit Delphi aberta %s apos fallback; obtido: %s", filePath, result)
 	}
 }
 
@@ -138,18 +293,31 @@ func TestDelphiOracle_Diagnostics_UsaCachePublishDiagnosticsQuandoDocumentDiagno
 func setupDelphiOracleFakeClient(t *testing.T) (*lsp.Client, string, func()) {
 	t.Helper()
 
-	workspaceDir := t.TempDir()
-	filePath := filepath.Join(workspaceDir, "main.pas")
-	fixture := strings.Join([]string{
-		"procedure FindCustomer;",
-		"begin",
-		"  MissingIdentifier := 1;",
-		"end;",
-		"",
-	}, "\n")
+	fixtures := map[string]string{
+		"main.pas": strings.Join([]string{
+			"procedure FindCustomer;",
+			"begin",
+			"  MissingIdentifier := 1;",
+			"end;",
+			"",
+		}, "\n"),
+	}
 
-	if err := os.WriteFile(filePath, []byte(fixture), 0o644); err != nil {
-		t.Fatalf("falha ao escrever fixture Delphi: %v", err)
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	return client, filePaths["main.pas"], cleanup
+}
+
+func setupDelphiOracleFakeClientWithFixtures(t *testing.T, fixtures map[string]string) (*lsp.Client, map[string]string, func()) {
+	t.Helper()
+
+	workspaceDir := t.TempDir()
+	filePaths := make(map[string]string, len(fixtures))
+	for fileName, content := range fixtures {
+		filePath := filepath.Join(workspaceDir, fileName)
+		if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+			t.Fatalf("falha ao escrever fixture Delphi %s: %v", fileName, err)
+		}
+		filePaths[fileName] = filePath
 	}
 
 	t.Setenv(fakeLSPEnv, "1")
@@ -179,12 +347,14 @@ func setupDelphiOracleFakeClient(t *testing.T) (*lsp.Client, string, func()) {
 		}
 	}
 
-	return client, filePath, cleanup
+	return client, filePaths, cleanup
 }
 
 func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 	reader := bufio.NewReader(stdin)
 	writer := stdout
+	hasWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolProviderEnv) == "1"
+	returnsEmptyWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolEmptyEnv) == "1"
 
 	for {
 		msg, err := lsp.ReadMessage(reader)
@@ -194,13 +364,16 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 
 		switch msg.Method {
 		case "initialize":
-			result := map[string]any{
-				"capabilities": map[string]any{
-					"definitionProvider": true,
-					"referencesProvider": true,
-					"hoverProvider":      true,
-				},
+			capabilities := map[string]any{
+				"definitionProvider": true,
+				"referencesProvider": true,
+				"hoverProvider":      true,
 			}
+			if hasWorkspaceSymbol {
+				capabilities["workspaceSymbolProvider"] = true
+			}
+
+			result := map[string]any{"capabilities": capabilities}
 			sendFakeResponse(writer, msg.ID, result, nil)
 		case "initialized":
 			// no-op
@@ -232,6 +405,11 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 			}
 			_ = lsp.WriteMessage(writer, notif)
 		case "workspace/symbol":
+			if returnsEmptyWorkspaceSymbol {
+				sendFakeResponse(writer, msg.ID, []map[string]any{}, nil)
+				break
+			}
+
 			sendFakeResponse(writer, msg.ID, nil, &lsp.ResponseError{Code: -32601, Message: "method not found: workspace/symbol"})
 		case "textDocument/documentSymbol":
 			sendFakeResponse(writer, msg.ID, nil, &lsp.ResponseError{Code: -32601, Message: "method not found: textDocument/documentSymbol"})

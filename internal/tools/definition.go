@@ -33,6 +33,7 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 	for _, symbol := range results {
 		kind := ""
 		container := ""
+		displayName := symbol.GetName()
 
 		// Skip symbols that we are not looking for. workspace/symbol may return
 		// a large number of fuzzy matches.
@@ -45,11 +46,11 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 			}
 
 			// Handle different matching strategies based on the search term
-			if strings.Contains(symbolName, ".") {
-				// For qualified names like "Type.Method", require exact match
-				if symbol.GetName() != symbolName {
+			if isQualifiedSymbolQuery(symbolName) {
+				if !matchesQualifiedWorkspaceSymbol(symbolName, symbol.GetName(), v.ContainerName) {
 					continue
 				}
+				displayName = symbolName
 			} else {
 				// For unqualified names like "Method"
 				if v.Kind == protocol.Method {
@@ -71,7 +72,7 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 		toolsLogger.Debug("Found symbol: %s", symbol.GetName())
 		loc := symbol.GetLocation()
 
-		definitionText, defErr := buildDefinitionBlock(ctx, client, symbol.GetName(), loc, kind, container)
+		definitionText, defErr := buildDefinitionBlock(ctx, client, displayName, loc, kind, container)
 		if defErr != nil {
 			toolsLogger.Error("Error getting definition: %v", defErr)
 			continue
@@ -85,6 +86,22 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	return strings.Join(definitions, ""), nil
+}
+
+func isQualifiedSymbolQuery(symbolName string) bool {
+	return strings.Contains(symbolName, ".") || strings.Contains(symbolName, "::")
+}
+
+func matchesQualifiedWorkspaceSymbol(query string, name string, container string) bool {
+	if name == query {
+		return true
+	}
+
+	if container == "" {
+		return false
+	}
+
+	return container+"."+name == query || container+"::"+name == query
 }
 
 func readDefinitionWithInferredPosition(ctx context.Context, client *lsp.Client, symbolName string) (string, error) {

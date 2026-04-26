@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,95 +31,33 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	var allReferences []string
+	attemptedLocations := make(map[string]struct{}, len(symbolLocations))
 	for _, loc := range symbolLocations {
-		if err := client.OpenFile(ctx, loc.URI.Path()); err != nil {
-			toolsLogger.Error("Error opening file: %v", err)
-			continue
-		}
+		attemptedLocations[referenceLocationKey(loc)] = struct{}{}
 
-		// Use LSP references request with correct params structure
-		refsParams := protocol.ReferenceParams{
-			TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-				TextDocument: protocol.TextDocumentIdentifier{
-					URI: loc.URI,
-				},
-				Position: loc.Range.Start,
-			},
-			Context: protocol.ReferenceContext{
-				IncludeDeclaration: false,
-			},
-		}
-		refs, err := client.References(ctx, refsParams)
+		referenceBlocks, err := collectReferenceBlocks(ctx, client, loc, contextLines)
 		if err != nil {
-			return "", fmt.Errorf("failed to get references: %v", err)
+			return "", err
 		}
 
-		// Group references by file
-		refsByFile := make(map[protocol.DocumentUri][]protocol.Location)
-		for _, ref := range refs {
-			refsByFile[ref.URI] = append(refsByFile[ref.URI], ref)
-		}
+		allReferences = append(allReferences, referenceBlocks...)
+	}
 
-		// Get sorted list of URIs
-		uris := make([]string, 0, len(refsByFile))
-		for uri := range refsByFile {
-			uris = append(uris, string(uri))
-		}
-		sort.Strings(uris)
+	if len(allReferences) == 0 {
+		retryLocations := collectOpenFileReferenceRetryLocations(client, symbolName, attemptedLocations)
+		for _, loc := range retryLocations {
+			attemptedLocations[referenceLocationKey(loc)] = struct{}{}
 
-		// Process each file's references in sorted order
-		for _, uriStr := range uris {
-			uri := protocol.DocumentUri(uriStr)
-			fileRefs := refsByFile[uri]
-			filePath, ok := uriPathFromString(uriStr)
-			if !ok {
-				filePath = uriStr
-			}
-
-			// Format file header
-			fileInfo := fmt.Sprintf("---\n\n%s\nReferences in File: %d\n",
-				filePath,
-				len(fileRefs),
-			)
-
-			// Format locations with context
-			fileContent, err := os.ReadFile(filePath)
+			referenceBlocks, err := collectReferenceBlocks(ctx, client, loc, contextLines)
 			if err != nil {
-				// Log error but continue with other files
-				allReferences = append(allReferences, fileInfo+"\nError reading file: "+err.Error())
+				return "", err
+			}
+			if len(referenceBlocks) == 0 {
 				continue
 			}
 
-			lines := strings.Split(string(fileContent), "\n")
-
-			// Track reference locations for header display
-			var locStrings []string
-			for _, ref := range fileRefs {
-				locStr := fmt.Sprintf("L%d:C%d",
-					ref.Range.Start.Line+1,
-					ref.Range.Start.Character+1)
-				locStrings = append(locStrings, locStr)
-			}
-
-			// Collect lines to display using the utility function
-			linesToShow, err := GetLineRangesToDisplay(ctx, client, fileRefs, len(lines), contextLines)
-			if err != nil {
-				// Log error but continue with other files
-				continue
-			}
-
-			// Convert to line ranges using the utility function
-			lineRanges := ConvertLinesToRanges(linesToShow, len(lines))
-
-			// Format with locations in header
-			formattedOutput := fileInfo
-			if len(locStrings) > 0 {
-				formattedOutput += "At: " + strings.Join(locStrings, ", ") + "\n"
-			}
-
-			// Format the content with ranges
-			formattedOutput += "\n" + FormatLinesWithRanges(lines, lineRanges)
-			allReferences = append(allReferences, formattedOutput)
+			allReferences = append(allReferences, referenceBlocks...)
+			break
 		}
 	}
 
@@ -157,13 +96,24 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse results: %v", err)
 	}
+	if len(results) == 0 {
+		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
+		if !found {
+			return nil, nil
+		}
+
+		return []protocol.Location{inferredLocation}, nil
+	}
 
 	locations := make([]protocol.Location, 0, len(results))
 	for _, symbol := range results {
-		if strings.Contains(symbolName, ".") {
-			parts := strings.Split(symbolName, ".")
-			methodName := parts[len(parts)-1]
-			if symbol.GetName() != symbolName && symbol.GetName() != methodName {
+		if isQualifiedSymbolQuery(symbolName) {
+			symbolInfo, ok := symbol.(*protocol.SymbolInformation)
+			if !ok {
+				if symbol.GetName() != symbolName {
+					continue
+				}
+			} else if !matchesQualifiedWorkspaceSymbol(symbolName, symbol.GetName(), symbolInfo.ContainerName) {
 				continue
 			}
 		} else if symbol.GetName() != symbolName {
@@ -174,4 +124,155 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 	}
 
 	return locations, nil
+}
+
+func collectReferenceBlocks(ctx context.Context, client *lsp.Client, loc protocol.Location, contextLines int) ([]string, error) {
+	if err := client.OpenFile(ctx, loc.URI.Path()); err != nil {
+		toolsLogger.Error("Error opening file: %v", err)
+		return nil, nil
+	}
+
+	refsParams := protocol.ReferenceParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: loc.URI,
+			},
+			Position: loc.Range.Start,
+		},
+		Context: protocol.ReferenceContext{
+			IncludeDeclaration: false,
+		},
+	}
+	refs, err := client.References(ctx, refsParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get references: %v", err)
+	}
+
+	refsByFile := make(map[protocol.DocumentUri][]protocol.Location)
+	for _, ref := range refs {
+		refsByFile[ref.URI] = append(refsByFile[ref.URI], ref)
+	}
+
+	uris := make([]string, 0, len(refsByFile))
+	for uri := range refsByFile {
+		uris = append(uris, string(uri))
+	}
+	sort.Strings(uris)
+
+	allReferences := make([]string, 0, len(uris))
+	for _, uriStr := range uris {
+		uri := protocol.DocumentUri(uriStr)
+		fileRefs := refsByFile[uri]
+		filePath, ok := uriPathFromString(uriStr)
+		if !ok {
+			filePath = uriStr
+		}
+
+		fileInfo := fmt.Sprintf("---\n\n%s\nReferences in File: %d\n",
+			filePath,
+			len(fileRefs),
+		)
+
+		fileContent, err := os.ReadFile(filePath)
+		if err != nil {
+			allReferences = append(allReferences, fileInfo+"\nError reading file: "+err.Error())
+			continue
+		}
+
+		lines := strings.Split(string(fileContent), "\n")
+
+		var locStrings []string
+		for _, ref := range fileRefs {
+			locStr := fmt.Sprintf("L%d:C%d",
+				ref.Range.Start.Line+1,
+				ref.Range.Start.Character+1)
+			locStrings = append(locStrings, locStr)
+		}
+
+		linesToShow, err := GetLineRangesToDisplay(ctx, client, fileRefs, len(lines), contextLines)
+		if err != nil {
+			continue
+		}
+
+		lineRanges := ConvertLinesToRanges(linesToShow, len(lines))
+
+		formattedOutput := fileInfo
+		if len(locStrings) > 0 {
+			formattedOutput += "At: " + strings.Join(locStrings, ", ") + "\n"
+		}
+
+		formattedOutput += "\n" + FormatLinesWithRanges(lines, lineRanges)
+		allReferences = append(allReferences, formattedOutput)
+	}
+
+	return allReferences, nil
+}
+
+func collectOpenFileReferenceRetryLocations(client *lsp.Client, symbolName string, attemptedLocations map[string]struct{}) []protocol.Location {
+	searchPatterns := buildSymbolSearchPatterns(symbolName)
+	if len(searchPatterns) == 0 {
+		return nil
+	}
+
+	openFiles := client.GetOpenFilesSnapshot()
+	retryLocations := make([]protocol.Location, 0, len(openFiles))
+
+	for _, uriStr := range openFiles {
+		path, ok := uriPathFromString(uriStr)
+		if !ok {
+			continue
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(content), "\n")
+		candidate, found := findOpenFileReferenceRetryLocation(protocol.DocumentUri(uriStr), lines, searchPatterns, attemptedLocations)
+		if !found {
+			continue
+		}
+
+		retryLocations = append(retryLocations, candidate)
+	}
+
+	return retryLocations
+}
+
+func findOpenFileReferenceRetryLocation(uri protocol.DocumentUri, lines []string, searchPatterns []*regexp.Regexp, attemptedLocations map[string]struct{}) (protocol.Location, bool) {
+	for lineIndex, line := range lines {
+		searchLine := trimSingleLineComment(line)
+		for _, pattern := range searchPatterns {
+			matchRange := pattern.FindStringIndex(searchLine)
+			if matchRange == nil {
+				continue
+			}
+
+			candidate := protocol.Location{
+				URI: uri,
+				Range: protocol.Range{
+					Start: protocol.Position{Line: uint32(lineIndex), Character: uint32(matchRange[0])},
+					End:   protocol.Position{Line: uint32(lineIndex), Character: uint32(matchRange[1])},
+				},
+			}
+			if _, alreadyTried := attemptedLocations[referenceLocationKey(candidate)]; alreadyTried {
+				continue
+			}
+
+			return candidate, true
+		}
+	}
+
+	return protocol.Location{}, false
+}
+
+func referenceLocationKey(loc protocol.Location) string {
+	return fmt.Sprintf("%s:%d:%d:%d:%d",
+		loc.URI,
+		loc.Range.Start.Line,
+		loc.Range.Start.Character,
+		loc.Range.End.Line,
+		loc.Range.End.Character,
+	)
 }

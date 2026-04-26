@@ -58,7 +58,6 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 		lines := strings.Split(string(content), "\n")
 		for lineIndex, line := range lines {
 			searchLine := trimSingleLineComment(line)
-			lineScore := scorePotentialDeclarationLine(searchLine)
 			for _, pattern := range searchPatterns {
 				matchRange := pattern.FindStringIndex(searchLine)
 				if matchRange == nil {
@@ -66,6 +65,11 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 				}
 				if lineIndex < 0 || matchRange[0] < 0 || matchRange[1] < matchRange[0] {
 					continue
+				}
+
+				candidateScore := scorePotentialDeclarationLine(searchLine)
+				if strings.EqualFold(searchLine[matchRange[0]:matchRange[1]], symbolName) {
+					candidateScore += 2
 				}
 
 				candidate := symbolLocationCandidate{
@@ -76,7 +80,7 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 							End:   protocol.Position{Line: uint32(lineIndex), Character: uint32(matchRange[1])},
 						},
 					},
-					score: lineScore,
+					score: candidateScore,
 					line:  lineIndex,
 					path:  path,
 				}
@@ -100,6 +104,10 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 
 func scorePotentialDeclarationLine(line string) int {
 	lowerLine := strings.ToLower(line)
+	if strings.Contains(lowerLine, "constructor ") || strings.Contains(lowerLine, "destructor ") {
+		return 3
+	}
+
 	if strings.Contains(lowerLine, "procedure ") || strings.Contains(lowerLine, "function ") || strings.Contains(lowerLine, "method ") {
 		return 1
 	}

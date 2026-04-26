@@ -136,6 +136,58 @@ func TestApplyTextEdits_AcceptsFileURIInput(t *testing.T) {
 	}
 }
 
+func TestApplyTextEdits_SingleLineEdit_PersistsContentToDisk(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "single_line.txt")
+	originalContent := "original value"
+	if err := os.WriteFile(filePath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("failed to write single-line fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	_, err = ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 1,
+		EndLine:   1,
+		NewText:   "updated value",
+	}})
+	if err != nil {
+		t.Fatalf("expected single-line edit to succeed and persist on disk, got error: %v", err)
+	}
+
+	updatedContent, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read single-line file after edit: %v", err)
+	}
+
+	if string(updatedContent) != "updated value" {
+		t.Fatalf("expected single-line edit to persist updated disk content; got %q", string(updatedContent))
+	}
+}
+
 func TestApplyTextEdits_InvalidRangeReturnsErrorAndKeepsOriginalContent(t *testing.T) {
 	workspaceDir := t.TempDir()
 	filePath := filepath.Join(workspaceDir, "main.go")
