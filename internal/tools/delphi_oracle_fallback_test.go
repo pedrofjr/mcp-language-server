@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +24,17 @@ const (
 	fakeLSPWorkspaceSymbolEmptyEnv    = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_EMPTY_RESULT"
 	fakeLSPWorkspaceSymbolIrrelevantEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_IRRELEVANT_RESULT"
 	fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_MATCHED_BUT_UNSUSTAINED_RESULT"
+	fakeLSPReferencesPayloadEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_REFERENCES_PAYLOAD"
 )
+
+var fakeLSPReferenceLinePattern = regexp.MustCompile(`L(\d+):C\d+`)
+
+type fakeDelphiOracleReferenceRange struct {
+	StartLine      int `json:"startLine"`
+	StartCharacter int `json:"startCharacter"`
+	EndLine        int `json:"endLine"`
+	EndCharacter   int `json:"endCharacter"`
+}
 
 func TestHelperProcessDelphiOracleFakeLSP(t *testing.T) {
 	if os.Getenv(fakeLSPEnv) != "1" {
@@ -465,6 +478,80 @@ func TestDelphiOracle_ReadDefinition_RealSynautilTimeZoneBiasInOpenedExternalFil
 	}
 }
 
+func TestDelphiOracle_FindReferences_RealWorkspace_CharacterizesRawPayloadAndFilteredResult(t *testing.T) {
+	backendPath := resolveRealOracleLSPPath()
+	if backendPath == "" {
+		t.Skip("oracle-lsp.exe real nao encontrado; defina MCP_REAL_ORACLE_LSP_PATH para habilitar este characterization test")
+	}
+
+	workspaceRoot := resolveRealDelphiWorkspaceRoot()
+	if workspaceRoot == "" {
+		t.Skip("workspace real nao encontrado; defina MCP_REAL_DELPHI_WORKSPACE para habilitar este characterization test")
+	}
+
+	testCases := []struct {
+		name               string
+		symbol             string
+		anchorRelativePath string
+		anchorMustContain  string
+	}{
+		{
+			name:               "square",
+			symbol:             "square",
+			anchorRelativePath: filepath.Join("jvcl", "jvcl", "examples", "JvInterpreterDemos", "JvInterpreterTest", "samples", "sample - long loop.pas"),
+			anchorMustContain:  "function square(P: Integer): Integer;",
+		},
+		{
+			name:               "qualified_tblocksocket_create",
+			symbol:             "TBlockSocket.Create",
+			anchorRelativePath: filepath.Join("synapse", "blcksock.pas"),
+			anchorMustContain:  "constructor TBlockSocket.Create;",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			anchorPath := filepath.Join(workspaceRoot, testCase.anchorRelativePath)
+			ensureRealDelphiAnchorFile(t, anchorPath, testCase.anchorMustContain)
+
+			client, cleanup := setupDelphiOracleRealClient(t, backendPath, workspaceRoot)
+			defer cleanup()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+
+			if err := client.OpenFile(ctx, anchorPath); err != nil {
+				t.Fatalf("falha ao abrir arquivo ancora real %s para %s: %v", anchorPath, testCase.symbol, err)
+			}
+
+			symbolLocations, rawLocations, err := captureRawReferencePayload(ctx, client, testCase.symbol)
+			if err != nil {
+				t.Fatalf("falha ao capturar payload cru de textDocument/references para %s: %v", testCase.symbol, err)
+			}
+
+			result, err := FindReferences(ctx, client, testCase.symbol)
+			if err != nil {
+				t.Fatalf("FindReferences nao deveria falhar no workspace real para %s: %v", testCase.symbol, err)
+			}
+
+			filteredRawLocations := postProcessDelphiReferenceLocations(rawLocations)
+
+			t.Logf("symbol=%s anchor=%s symbol_locations=%d %s", testCase.symbol, anchorPath, len(symbolLocations), summarizeReferenceLocations(symbolLocations, 4, 4))
+			t.Logf("symbol=%s raw_payload_locations=%d %s", testCase.symbol, len(rawLocations), summarizeReferenceLocations(rawLocations, 8, 6))
+			t.Logf("symbol=%s raw_payload_filtered=%d %s", testCase.symbol, len(filteredRawLocations), summarizeReferenceLocations(filteredRawLocations, 8, 6))
+			t.Logf("symbol=%s filtered_result=%s", testCase.symbol, summarizeFilteredReferenceResult(result))
+
+			if len(symbolLocations) == 0 {
+				t.Fatalf("esperado localizar ao menos uma declaracao alvo para %s no workspace real %s", testCase.symbol, workspaceRoot)
+			}
+
+			if len(filteredRawLocations) > 0 && strings.Contains(result, "No references found") {
+				t.Fatalf("payload cru filtrado ainda contem %d locations para %s, mas o resultado final ficou vazio: %s", len(filteredRawLocations), testCase.symbol, result)
+			}
+		})
+	}
+}
+
 func TestDelphiOracle_ReadDefinition_QualifiedQueryWithoutOwnedDeclaration_ReturnsNotFoundInsteadOfLeafFalsePositive(t *testing.T) {
 	fixtures := map[string]string{
 		"main.pas": strings.Join([]string{
@@ -862,6 +949,149 @@ func TestDelphiOracle_FindReferences_SquareInLongLoopSampleWithoutOpenFiles_Pref
 	}
 }
 
+func TestDelphiOracle_FindReferences_LSPPayloadFiltersCommentDuplicatesAndRanksExecutableForSquare(t *testing.T) {
+	t.Setenv("LSP_CONTEXT_LINES", "0")
+	setFakeDelphiOracleReferencePayload(t, []fakeDelphiOracleReferenceRange{
+		{StartLine: 4, StartCharacter: 9, EndLine: 4, EndCharacter: 15},
+		{StartLine: 8, StartCharacter: 2, EndLine: 8, EndCharacter: 8},
+		{StartLine: 9, StartCharacter: 3, EndLine: 9, EndCharacter: 9},
+		{StartLine: 10, StartCharacter: 3, EndLine: 10, EndCharacter: 9},
+		{StartLine: 21, StartCharacter: 29, EndLine: 21, EndCharacter: 35},
+		{StartLine: 21, StartCharacter: 17, EndLine: 21, EndCharacter: 23},
+	})
+
+	fixtures := map[string]string{
+		"math_unit.pas": strings.Join([]string{
+			"unit MathUnit;",
+			"",
+			"interface",
+			"",
+			"function square(Value: Integer): Integer;",
+			"",
+			"implementation",
+			"",
+			"{ square in brace comment should be ignored }",
+			"(* square in paren comment should also be ignored *)",
+			"// square in slash comment should also be ignored",
+			"",
+			"function square(Value: Integer): Integer;",
+			"begin",
+			"  Result := Value * Value;",
+			"end;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  Accumulator: Integer;",
+			"begin",
+			"  Accumulator := square(3) + square(4);",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["math_unit.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture square para payload cru de references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "square")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar para payload cru do LSP com square: %v", err)
+	}
+
+	if !strings.Contains(result, "References in File: 2") {
+		t.Fatalf("esperado manter apenas declaracao e linha executavel apos filtro/dedup do payload cru; obtido: %s", result)
+	}
+
+	if strings.Contains(result, "brace comment should be ignored") || strings.Contains(result, "paren comment should also be ignored") || strings.Contains(result, "slash comment should also be ignored") {
+		t.Fatalf("comentarios Delphi retornados pelo LSP nao devem sobreviver ao resultado final; obtido: %s", result)
+	}
+
+	if gotLines := extractReferenceLinesFromResult(t, result); !sameIntSlice(gotLines, []int{22, 5}) {
+		t.Fatalf("esperado ranquear linha executavel antes da declaracao e deduplicar a mesma linha em square; linhas obtidas: %v; resultado: %s", gotLines, result)
+	}
+}
+
+func TestDelphiOracle_FindReferences_LSPPayloadFiltersCommentDuplicatesAndRanksExecutableForQualifiedTShapeSquare(t *testing.T) {
+	t.Setenv("LSP_CONTEXT_LINES", "0")
+	setFakeDelphiOracleReferencePayload(t, []fakeDelphiOracleReferenceRange{
+		{StartLine: 12, StartCharacter: 16, EndLine: 12, EndCharacter: 22},
+		{StartLine: 25, StartCharacter: 11, EndLine: 25, EndCharacter: 17},
+		{StartLine: 26, StartCharacter: 3, EndLine: 26, EndCharacter: 16},
+		{StartLine: 22, StartCharacter: 33, EndLine: 22, EndCharacter: 39},
+		{StartLine: 22, StartCharacter: 16, EndLine: 22, EndCharacter: 22},
+	})
+
+	fixtures := map[string]string{
+		"shapes.pas": strings.Join([]string{
+			"unit Shapes;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TShape = class",
+			"  public",
+			"    function square(Value: Integer): Integer;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"function TShape.square(Value: Integer): Integer;",
+			"begin",
+			"  Result := Value * Value;",
+			"end;",
+			"",
+			"procedure Demo;",
+			"var",
+			"  Shape: TShape;",
+			"begin",
+			"  Shape := TShape.Create;",
+			"  WriteLn(Shape.square(5) + Shape.square(6));",
+			"end;",
+			"",
+			"{ square comment noise should not survive for TShape.square }",
+			"// TOtherShape.square should not leak back into the output",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["shapes.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture TShape.square para payload cru de references: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "TShape.square")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar para payload cru qualificado do LSP: %v", err)
+	}
+
+	if !strings.Contains(result, "References in File: 2") {
+		t.Fatalf("esperado manter apenas implementacao e linha executavel qualificadas apos filtro/dedup; obtido: %s", result)
+	}
+
+	if strings.Contains(result, "comment noise should not survive") || strings.Contains(result, "TOtherShape.square should not leak") {
+		t.Fatalf("comentarios Delphi nao devem reabrir ruido no caso qualificado TShape.square; obtido: %s", result)
+	}
+
+	if gotLines := extractReferenceLinesFromResult(t, result); !sameIntSlice(gotLines, []int{23, 13}) {
+		t.Fatalf("esperado ranquear a linha executavel antes da implementacao qualificada e deduplicar a mesma linha em TShape.square; linhas obtidas: %v; resultado: %s", gotLines, result)
+	}
+}
+
 func TestDelphiOracle_GetFullDefinition_FallbackWhenDocumentSymbolUnavailable(t *testing.T) {
 	client, filePath, cleanup := setupDelphiOracleFakeClient(t)
 	defer cleanup()
@@ -970,6 +1200,218 @@ func resolveRealSynautilPath() string {
 	return ""
 }
 
+func resolveRealOracleLSPPath() string {
+	candidates := make([]string, 0, 2)
+
+	if configuredPath := strings.TrimSpace(os.Getenv("MCP_REAL_ORACLE_LSP_PATH")); configuredPath != "" {
+		candidates = append(candidates, configuredPath)
+	}
+
+	candidates = append(candidates,
+		filepath.Join("C:\\Users", "pedro", "Downloads", "Delphi_Oracle", "oracle-lsp", "target", "release", "oracle-lsp.exe"),
+	)
+
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return filepath.Clean(candidate)
+		}
+	}
+
+	return ""
+}
+
+func resolveRealDelphiWorkspaceRoot() string {
+	candidates := make([]string, 0, 2)
+
+	if configuredPath := strings.TrimSpace(os.Getenv("MCP_REAL_DELPHI_WORKSPACE")); configuredPath != "" {
+		candidates = append(candidates, configuredPath)
+	}
+
+	candidates = append(candidates,
+		filepath.Join("C:\\Users", "pedro", "Downloads", "Projetos Teste LSP"),
+	)
+
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return filepath.Clean(candidate)
+		}
+	}
+
+	return ""
+}
+
+func ensureRealDelphiAnchorFile(t *testing.T, anchorPath string, mustContain string) {
+	t.Helper()
+
+	content, err := os.ReadFile(anchorPath)
+	if err != nil {
+		t.Skipf("arquivo ancora real nao disponivel em %s: %v", anchorPath, err)
+	}
+
+	if !strings.Contains(string(content), mustContain) {
+		t.Skipf("arquivo ancora real %s nao contem o trecho esperado %q; workspace real mudou", anchorPath, mustContain)
+	}
+}
+
+func setupDelphiOracleRealClient(t *testing.T, backendPath string, workspaceRoot string) (*lsp.Client, func()) {
+	t.Helper()
+
+	client, err := lsp.NewClient(backendPath)
+	if err != nil {
+		t.Fatalf("falha ao iniciar oracle-lsp real %s: %v", backendPath, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceRoot); err != nil {
+		_ = client.Close()
+		t.Fatalf("falha ao inicializar oracle-lsp real com workspace %s: %v", workspaceRoot, err)
+	}
+
+	cleanup := func() {
+		if err := client.Close(); err != nil {
+			_ = err
+		}
+	}
+
+	return client, cleanup
+}
+
+func captureRawReferencePayload(ctx context.Context, client *lsp.Client, symbolName string) ([]protocol.Location, []protocol.Location, error) {
+	symbolLocations, err := resolveReferenceSymbolLocations(ctx, client, symbolName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rawLocations := make([]protocol.Location, 0)
+	for _, location := range symbolLocations {
+		references, err := collectReferenceLocations(ctx, client, location)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		rawLocations = appendUniqueReferenceLocations(rawLocations, references)
+	}
+
+	return symbolLocations, rawLocations, nil
+}
+
+func summarizeReferenceLocations(locations []protocol.Location, maxFiles int, maxLinesPerFile int) string {
+	if len(locations) == 0 {
+		return "nenhuma location"
+	}
+
+	linesByFile := make(map[string][]int)
+	for _, location := range locations {
+		path := filepath.Clean(location.URI.Path())
+		linesByFile[path] = append(linesByFile[path], int(location.Range.Start.Line)+1)
+	}
+
+	files := make([]string, 0, len(linesByFile))
+	for file := range linesByFile {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+
+	parts := make([]string, 0, len(files))
+	for index, file := range files {
+		if maxFiles > 0 && index >= maxFiles {
+			parts = append(parts, fmt.Sprintf("... +%d arquivo(s)", len(files)-index))
+			break
+		}
+
+		lineNumbers := uniqueSortedLineNumbers(linesByFile[file])
+		parts = append(parts, fmt.Sprintf("%s [%s]", file, summarizeLineNumbers(lineNumbers, maxLinesPerFile)))
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+func summarizeFilteredReferenceResult(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return "resultado vazio"
+	}
+
+	if strings.HasPrefix(trimmed, "No references found") {
+		return trimmed
+	}
+
+	parts := make([]string, 0)
+	lastNonEmpty := ""
+	currentFile := ""
+	for _, line := range strings.Split(result, "\n") {
+		trimmedLine := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmedLine, "References in File:") {
+			currentFile = lastNonEmpty
+			continue
+		}
+
+		if strings.HasPrefix(trimmedLine, "At: ") {
+			if currentFile == "" {
+				currentFile = "<arquivo-desconhecido>"
+			}
+			parts = append(parts, fmt.Sprintf("%s [%s]", currentFile, strings.TrimPrefix(trimmedLine, "At: ")))
+			currentFile = ""
+			continue
+		}
+
+		if trimmedLine != "" && trimmedLine != "---" {
+			lastNonEmpty = trimmedLine
+		}
+	}
+
+	if len(parts) == 0 {
+		return trimmed
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+func uniqueSortedLineNumbers(lines []int) []int {
+	if len(lines) == 0 {
+		return nil
+	}
+
+	sorted := append([]int(nil), lines...)
+	sort.Ints(sorted)
+
+	result := sorted[:0]
+	for _, line := range sorted {
+		if len(result) == 0 || result[len(result)-1] != line {
+			result = append(result, line)
+		}
+	}
+
+	return result
+}
+
+func summarizeLineNumbers(lines []int, maxLines int) string {
+	if len(lines) == 0 {
+		return "sem linhas"
+	}
+
+	limit := len(lines)
+	if maxLines > 0 && limit > maxLines {
+		limit = maxLines
+	}
+
+	parts := make([]string, 0, limit+1)
+	for _, line := range lines[:limit] {
+		parts = append(parts, fmt.Sprintf("L%d", line))
+	}
+
+	if limit < len(lines) {
+		parts = append(parts, fmt.Sprintf("+%d", len(lines)-limit))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 func setupDelphiOracleFakeClientWithFixtures(t *testing.T, fixtures map[string]string) (*lsp.Client, map[string]string, func()) {
 	t.Helper()
 
@@ -1020,6 +1462,7 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 	returnsEmptyWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolEmptyEnv) == "1"
 	returnsIrrelevantWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolIrrelevantEnv) == "1"
 	returnsMatchedButUnsustainedWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv) == "1"
+	customReferenceRanges := loadFakeDelphiOracleReferenceRanges()
 	openedURI := ""
 	workspaceRoot := ""
 
@@ -1138,6 +1581,11 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 				} `json:"textDocument"`
 			}
 			_ = json.Unmarshal(msg.Params, &params)
+
+			if len(customReferenceRanges) > 0 {
+				sendFakeResponse(writer, msg.ID, buildDelphiOracleReferencePayload(params.TextDocument.URI, customReferenceRanges), nil)
+				break
+			}
 
 			result := []map[string]any{
 				{
@@ -1258,4 +1706,86 @@ func mustMarshal(v any) json.RawMessage {
 		panic(fmt.Sprintf("falha ao serializar json do fake LSP: %v", err))
 	}
 	return b
+}
+
+func setFakeDelphiOracleReferencePayload(t *testing.T, ranges []fakeDelphiOracleReferenceRange) {
+	t.Helper()
+
+	raw, err := json.Marshal(ranges)
+	if err != nil {
+		t.Fatalf("falha ao serializar payload cru de references para o fake LSP: %v", err)
+	}
+
+	t.Setenv(fakeLSPReferencesPayloadEnv, string(raw))
+}
+
+func loadFakeDelphiOracleReferenceRanges() []fakeDelphiOracleReferenceRange {
+	raw := strings.TrimSpace(os.Getenv(fakeLSPReferencesPayloadEnv))
+	if raw == "" {
+		return nil
+	}
+
+	var ranges []fakeDelphiOracleReferenceRange
+	if err := json.Unmarshal([]byte(raw), &ranges); err != nil {
+		panic(fmt.Sprintf("falha ao desserializar payload cru de references do fake LSP: %v", err))
+	}
+
+	return ranges
+}
+
+func buildDelphiOracleReferencePayload(uri string, ranges []fakeDelphiOracleReferenceRange) []map[string]any {
+	result := make([]map[string]any, 0, len(ranges))
+	for _, current := range ranges {
+		result = append(result, map[string]any{
+			"uri": uri,
+			"range": map[string]any{
+				"start": map[string]any{"line": current.StartLine, "character": current.StartCharacter},
+				"end":   map[string]any{"line": current.EndLine, "character": current.EndCharacter},
+			},
+		})
+	}
+
+	return result
+}
+
+func extractReferenceLinesFromResult(t *testing.T, result string) []int {
+	t.Helper()
+
+	positionsLine := ""
+	for _, line := range strings.Split(result, "\n") {
+		if strings.HasPrefix(line, "At: ") {
+			positionsLine = line
+			break
+		}
+	}
+
+	if positionsLine == "" {
+		t.Fatalf("resultado de references sem linha de posicoes At: %s", result)
+	}
+
+	matches := fakeLSPReferenceLinePattern.FindAllStringSubmatch(positionsLine, -1)
+	lines := make([]int, 0, len(matches))
+	for _, match := range matches {
+		lineNumber, err := strconv.Atoi(match[1])
+		if err != nil {
+			t.Fatalf("falha ao converter linha de referencia %q: %v", match[1], err)
+		}
+		lines = append(lines, lineNumber)
+	}
+
+	return lines
+}
+
+func sameIntSlice(left []int, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+
+	return true
 }

@@ -80,6 +80,11 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
 	}
 
+	allReferenceLocations = postProcessDelphiReferenceLocations(allReferenceLocations)
+	if len(allReferenceLocations) == 0 {
+		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
+	}
+
 	allReferences, err := formatReferenceBlocks(ctx, client, allReferenceLocations, contextLines)
 	if err != nil {
 		return "", err
@@ -583,4 +588,357 @@ func referenceLocationsNeedWorkspaceCompletion(referenceLocations []protocol.Loc
 	}
 
 	return true
+}
+
+type delphiReferenceBucket int
+
+const (
+	delphiReferenceBucketExecutable delphiReferenceBucket = iota
+	delphiReferenceBucketDeclaration
+	delphiReferenceBucketOther
+)
+
+type delphiReferenceCandidate struct {
+	location protocol.Location
+	bucket   delphiReferenceBucket
+	path     string
+}
+
+type delphiReferenceScanState struct {
+	inBraceComment   bool
+	inBraceDirective bool
+	inParenComment   bool
+	inParenDirective bool
+}
+
+type delphiReferenceLineClassification struct {
+	pureComment bool
+	bucket      delphiReferenceBucket
+}
+
+func postProcessDelphiReferenceLocations(referenceLocations []protocol.Location) []protocol.Location {
+	if len(referenceLocations) == 0 {
+		return nil
+	}
+
+	delphiRefsByURI := make(map[protocol.DocumentUri][]protocol.Location)
+	nonDelphiRefs := make([]protocol.Location, 0, len(referenceLocations))
+
+	for _, loc := range referenceLocations {
+		if !isDelphiWorkspaceReferenceFile(loc.URI.Path()) {
+			nonDelphiRefs = append(nonDelphiRefs, loc)
+			continue
+		}
+
+		delphiRefsByURI[loc.URI] = append(delphiRefsByURI[loc.URI], loc)
+	}
+
+	if len(delphiRefsByURI) == 0 {
+		return referenceLocations
+	}
+
+	processedRefs := make([]protocol.Location, 0, len(referenceLocations))
+	processedRefs = append(processedRefs, nonDelphiRefs...)
+
+	uriTexts := make([]string, 0, len(delphiRefsByURI))
+	for uri := range delphiRefsByURI {
+		uriTexts = append(uriTexts, string(uri))
+	}
+	sort.Strings(uriTexts)
+
+	for _, uriText := range uriTexts {
+		uri := protocol.DocumentUri(uriText)
+		fileRefs := delphiRefsByURI[uri]
+		path := uri.Path()
+
+		toolsLogger.Debug("Delphi references raw for %s: %s", path, formatReferenceLocationSummary(fileRefs))
+
+		filteredRefs, err := filterDelphiReferenceLocations(path, fileRefs)
+		if err != nil {
+			toolsLogger.Debug("failed to post-process Delphi references for %s: %v", path, err)
+			processedRefs = append(processedRefs, fileRefs...)
+			continue
+		}
+
+		toolsLogger.Debug("Delphi references filtered for %s: %s", path, formatReferenceLocationSummary(filteredRefs))
+		processedRefs = append(processedRefs, filteredRefs...)
+	}
+
+	return processedRefs
+}
+
+func filterDelphiReferenceLocations(path string, fileRefs []protocol.Location) ([]protocol.Location, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	lineClasses := classifyDelphiReferenceLines(strings.Split(string(content), "\n"))
+	bestByLine := make(map[int]delphiReferenceCandidate, len(fileRefs))
+	extraCandidates := make([]delphiReferenceCandidate, 0)
+
+	for _, loc := range fileRefs {
+		lineIndex := int(loc.Range.Start.Line)
+		if lineIndex < 0 || lineIndex >= len(lineClasses) {
+			extraCandidates = append(extraCandidates, delphiReferenceCandidate{location: loc, bucket: delphiReferenceBucketOther, path: path})
+			continue
+		}
+
+		lineClass := lineClasses[lineIndex]
+		if lineClass.pureComment {
+			continue
+		}
+
+		candidate := delphiReferenceCandidate{location: loc, bucket: lineClass.bucket, path: path}
+		current, exists := bestByLine[lineIndex]
+		if !exists || isBetterDelphiReferenceCandidate(candidate, current) {
+			bestByLine[lineIndex] = candidate
+		}
+	}
+
+	rankedCandidates := make([]delphiReferenceCandidate, 0, len(bestByLine)+len(extraCandidates))
+	for _, candidate := range bestByLine {
+		rankedCandidates = append(rankedCandidates, candidate)
+	}
+	rankedCandidates = append(rankedCandidates, extraCandidates...)
+
+	sort.Slice(rankedCandidates, func(i int, j int) bool {
+		return isBetterDelphiReferenceCandidate(rankedCandidates[i], rankedCandidates[j])
+	})
+	rankedCandidates = collapseDelphiDeclarationNoise(rankedCandidates)
+
+	filteredRefs := make([]protocol.Location, 0, len(rankedCandidates))
+	for _, candidate := range rankedCandidates {
+		filteredRefs = append(filteredRefs, candidate.location)
+	}
+
+	return filteredRefs, nil
+}
+
+func classifyDelphiReferenceLines(lines []string) []delphiReferenceLineClassification {
+	lineClasses := make([]delphiReferenceLineClassification, 0, len(lines))
+	state := delphiReferenceScanState{}
+
+	for _, line := range lines {
+		lineClasses = append(lineClasses, classifyDelphiReferenceLine(line, &state))
+	}
+
+	return lineClasses
+}
+
+func classifyDelphiReferenceLine(line string, state *delphiReferenceScanState) delphiReferenceLineClassification {
+	visibleLine := stripDelphiCommentsPreservingDirectives(line, state)
+	trimmedVisibleLine := strings.TrimSpace(visibleLine)
+	if trimmedVisibleLine == "" {
+		return delphiReferenceLineClassification{pureComment: strings.TrimSpace(line) != ""}
+	}
+
+	if looksLikeDelphiDeclarationReferenceLine(trimmedVisibleLine) {
+		return delphiReferenceLineClassification{bucket: delphiReferenceBucketDeclaration}
+	}
+
+	if looksLikeDelphiExecutableReferenceLine(trimmedVisibleLine) {
+		return delphiReferenceLineClassification{bucket: delphiReferenceBucketExecutable}
+	}
+
+	return delphiReferenceLineClassification{bucket: delphiReferenceBucketOther}
+}
+
+func stripDelphiCommentsPreservingDirectives(line string, state *delphiReferenceScanState) string {
+	lineBytes := []byte(line)
+	visibleLine := []byte(line)
+	inStringLiteral := false
+
+	for i := 0; i < len(lineBytes); i++ {
+		current := lineBytes[i]
+		next := byte(0)
+		if i+1 < len(lineBytes) {
+			next = lineBytes[i+1]
+		}
+
+		if state.inBraceComment {
+			visibleLine[i] = ' '
+			if current == '}' {
+				state.inBraceComment = false
+			}
+			continue
+		}
+
+		if state.inBraceDirective {
+			if current == '}' {
+				state.inBraceDirective = false
+			}
+			continue
+		}
+
+		if state.inParenComment {
+			visibleLine[i] = ' '
+			if current == '*' && next == ')' {
+				visibleLine[i+1] = ' '
+				i++
+				state.inParenComment = false
+			}
+			continue
+		}
+
+		if state.inParenDirective {
+			if current == '*' && next == ')' {
+				i++
+				state.inParenDirective = false
+			}
+			continue
+		}
+
+		if inStringLiteral {
+			if current == '\'' {
+				if next == '\'' {
+					i++
+					continue
+				}
+				inStringLiteral = false
+			}
+			continue
+		}
+
+		if current == '\'' {
+			inStringLiteral = true
+			continue
+		}
+
+		if current == '/' && next == '/' {
+			for j := i; j < len(visibleLine); j++ {
+				visibleLine[j] = ' '
+			}
+			break
+		}
+
+		if current == '{' {
+			if next == '$' {
+				state.inBraceDirective = true
+				continue
+			}
+
+			visibleLine[i] = ' '
+			state.inBraceComment = true
+			continue
+		}
+
+		if current == '(' && next == '*' {
+			if i+2 < len(lineBytes) && lineBytes[i+2] == '$' {
+				state.inParenDirective = true
+				i++
+				continue
+			}
+
+			visibleLine[i] = ' '
+			visibleLine[i+1] = ' '
+			i++
+			state.inParenComment = true
+			continue
+		}
+	}
+
+	return string(visibleLine)
+}
+
+func looksLikeDelphiDeclarationReferenceLine(line string) bool {
+	lowerLine := strings.ToLower(line)
+	if scorePotentialDeclarationLine(lowerLine) > 0 {
+		return true
+	}
+
+	return strings.Contains(lowerLine, "property ") || strings.Contains(lowerLine, "operator ")
+}
+
+func looksLikeDelphiExecutableReferenceLine(line string) bool {
+	lowerLine := strings.ToLower(strings.TrimSpace(line))
+	if lowerLine == "" {
+		return false
+	}
+
+	if strings.HasPrefix(lowerLine, "{$") || strings.HasPrefix(lowerLine, "(*$") {
+		return false
+	}
+
+	switch lowerLine {
+	case "interface", "implementation", "type", "var", "const", "resourcestring", "label", "threadvar", "begin", "end", "end;", "private", "protected", "public", "published", "automated", "strict private", "strict protected", "strict public", "strict published":
+		return false
+	}
+
+	if strings.HasPrefix(lowerLine, "unit ") || strings.HasPrefix(lowerLine, "uses ") || strings.HasPrefix(lowerLine, "exports ") {
+		return false
+	}
+
+	if strings.Contains(lowerLine, ":") && !strings.Contains(lowerLine, ":=") && !strings.Contains(lowerLine, "(") && !strings.Contains(lowerLine, "[") {
+		return false
+	}
+
+	return true
+}
+
+func isBetterDelphiReferenceCandidate(left delphiReferenceCandidate, right delphiReferenceCandidate) bool {
+	if left.bucket != right.bucket {
+		return left.bucket < right.bucket
+	}
+
+	if left.path != right.path {
+		return left.path < right.path
+	}
+
+	if left.location.Range.Start.Line != right.location.Range.Start.Line {
+		return left.location.Range.Start.Line < right.location.Range.Start.Line
+	}
+
+	if left.location.Range.Start.Character != right.location.Range.Start.Character {
+		return left.location.Range.Start.Character < right.location.Range.Start.Character
+	}
+
+	if left.location.Range.End.Line != right.location.Range.End.Line {
+		return left.location.Range.End.Line < right.location.Range.End.Line
+	}
+
+	return left.location.Range.End.Character < right.location.Range.End.Character
+}
+
+func collapseDelphiDeclarationNoise(candidates []delphiReferenceCandidate) []delphiReferenceCandidate {
+	hasExecutable := false
+	for _, candidate := range candidates {
+		if candidate.bucket == delphiReferenceBucketExecutable {
+			hasExecutable = true
+			break
+		}
+	}
+
+	if !hasExecutable {
+		return candidates
+	}
+
+	filtered := make([]delphiReferenceCandidate, 0, len(candidates))
+	keptDeclaration := false
+	for _, candidate := range candidates {
+		if candidate.bucket == delphiReferenceBucketDeclaration {
+			if keptDeclaration {
+				continue
+			}
+
+			keptDeclaration = true
+		}
+
+		filtered = append(filtered, candidate)
+	}
+
+	return filtered
+}
+
+func formatReferenceLocationSummary(locations []protocol.Location) string {
+	if len(locations) == 0 {
+		return "[]"
+	}
+
+	parts := make([]string, 0, len(locations))
+	for _, loc := range locations {
+		parts = append(parts, fmt.Sprintf("L%d:C%d", loc.Range.Start.Line+1, loc.Range.Start.Character+1))
+	}
+
+	return "[" + strings.Join(parts, ", ") + "]"
 }
