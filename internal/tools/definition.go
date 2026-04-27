@@ -11,6 +11,10 @@ import (
 
 func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) (string, error) {
 	if !client.SupportsWorkspaceSymbol() {
+		if _, found := inferDelphiSymbolLocation(client, symbolName); found {
+			return readDefinitionWithDelphiInferredPosition(ctx, client, symbolName)
+		}
+
 		return readDefinitionWithInferredPosition(ctx, client, symbolName)
 	}
 
@@ -30,6 +34,7 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	var definitions []string
+	matchedWorkspaceSymbol := false
 	for _, symbol := range results {
 		kind := ""
 		container := ""
@@ -69,6 +74,8 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 			}
 		}
 
+		matchedWorkspaceSymbol = true
+
 		toolsLogger.Debug("Found symbol: %s", symbol.GetName())
 		loc := symbol.GetLocation()
 
@@ -82,10 +89,45 @@ func ReadDefinition(ctx context.Context, client *lsp.Client, symbolName string) 
 	}
 
 	if len(definitions) == 0 {
+		if !matchedWorkspaceSymbol || isQualifiedSymbolQuery(symbolName) {
+			return readDefinitionWithDelphiInferredPosition(ctx, client, symbolName)
+		}
+
 		return fmt.Sprintf("%s not found", symbolName), nil
 	}
 
 	return strings.Join(definitions, ""), nil
+}
+
+func readDefinitionWithDelphiInferredPosition(ctx context.Context, client *lsp.Client, symbolName string) (string, error) {
+	inferredLocation, found := inferDelphiSymbolLocation(client, symbolName)
+	if !found {
+		return fmt.Sprintf("%s not found", symbolName), nil
+	}
+
+	defResult, err := client.Definition(ctx, protocol.DefinitionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: inferredLocation.URI},
+			Position:     inferredLocation.Range.Start,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch definition fallback: %v", err)
+	}
+
+	locations := definitionResultToLocations(defResult)
+	if len(locations) == 0 {
+		locations = []protocol.Location{inferredLocation}
+	} else if !locationMatchesDelphiSymbol(locations[0], symbolName) {
+		locations = []protocol.Location{inferredLocation}
+	}
+
+	definitionText, buildErr := buildDefinitionBlock(ctx, client, symbolName, locations[0], "", "")
+	if buildErr != nil {
+		return "", fmt.Errorf("failed to build fallback definition: %v", buildErr)
+	}
+
+	return definitionText, nil
 }
 
 func isQualifiedSymbolQuery(symbolName string) bool {

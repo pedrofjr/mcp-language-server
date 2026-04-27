@@ -92,6 +92,9 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 	if !client.SupportsWorkspaceSymbol() {
 		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
 		if !found {
+			inferredLocation, found = inferDelphiSymbolLocationFromWorkspace(client, symbolName)
+		}
+		if !found {
 			return nil, nil
 		}
 
@@ -106,6 +109,9 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 
 		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
 		if !found {
+			inferredLocation, found = inferDelphiSymbolLocationFromWorkspace(client, symbolName)
+		}
+		if !found {
 			return nil, nil
 		}
 
@@ -118,6 +124,9 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 	}
 	if len(results) == 0 {
 		inferredLocation, found := inferSymbolLocationFromOpenFiles(client, symbolName)
+		if !found {
+			inferredLocation, found = inferDelphiSymbolLocationFromWorkspace(client, symbolName)
+		}
 		if !found {
 			return nil, nil
 		}
@@ -141,6 +150,15 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 		}
 
 		locations = append(locations, symbol.GetLocation())
+	}
+
+	if len(locations) == 0 {
+		inferredLocation, found := inferDelphiSymbolLocation(client, symbolName)
+		if !found {
+			return nil, nil
+		}
+
+		return []protocol.Location{inferredLocation}, nil
 	}
 
 	return locations, nil
@@ -300,8 +318,21 @@ func collectLastResortWorkspaceReferenceLocations(client *lsp.Client, symbolName
 		return nil
 	}
 
-	locations := make([]protocol.Location, 0)
-	seenLocations := make(map[string]struct{})
+	locations := make([]protocol.Location, 0, len(symbolLocations))
+	seenLocations := make(map[string]struct{}, len(symbolLocations))
+	for _, loc := range symbolLocations {
+		if !isDelphiWorkspaceReferenceFile(loc.URI.Path()) {
+			continue
+		}
+
+		locationKey := referenceLocationKey(loc)
+		if _, seen := seenLocations[locationKey]; seen {
+			continue
+		}
+
+		seenLocations[locationKey] = struct{}{}
+		locations = append(locations, loc)
+	}
 
 	for _, root := range workspaceRoots {
 		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
