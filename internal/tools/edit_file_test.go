@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -293,6 +294,81 @@ func TestApplyTextEdits_CRLFMultilineReplacementInPathWithSpaces_DoesNotInsertBl
 	want := "unit Sample;\r\nbegin\r\n  Added;\r\nend.\r\n"
 	if string(updatedContent) != want {
 		t.Fatalf("expected CRLF multiline replacement in path with spaces to avoid blank line and preserve footer; got %q, want %q", string(updatedContent), want)
+	}
+}
+
+func TestApplyTextEdits_CP1252NoBOMLineSplit_PreservesWindows1252BytesAndInsertsBananaLine(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "sample.pas")
+
+	var fixture bytes.Buffer
+	for lineNumber := 1; lineNumber <= 60; lineNumber++ {
+		if lineNumber == 55 {
+			fixture.Write([]byte{'/', '/', ' ', 'T', 'e', 's', 't', 'e', ' ', 0xe7, ' ', '~', ' ', 0xe3, ' ', 0xf5, '\n'})
+			continue
+		}
+
+		fmt.Fprintf(&fixture, "line %02d\n", lineNumber)
+	}
+
+	if err := os.WriteFile(filePath, fixture.Bytes(), 0o644); err != nil {
+		t.Fatalf("failed to write cp1252 fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	_, err = ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 55,
+		EndLine:   55,
+		NewText:   "// Teste \u00e7 ~ \u00e3 \u00f5\n//banana",
+	}})
+	if err != nil {
+		t.Fatalf("expected ApplyTextEdits to split cp1252 line without changing ansi bytes, got error: %v", err)
+	}
+
+	updatedContent, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read updated cp1252 fixture file: %v", err)
+	}
+
+	lines := bytes.Split(updatedContent, []byte("\n"))
+	if len(lines) < 56 {
+		t.Fatalf("expected edited cp1252 fixture to contain at least 56 lines, got %d", len(lines))
+	}
+
+	expectedLine55 := []byte{'/', '/', ' ', 'T', 'e', 's', 't', 'e', ' ', 0xe7, ' ', '~', ' ', 0xe3, ' ', 0xf5}
+	if !bytes.Equal(lines[54], expectedLine55) {
+		t.Fatalf("expected line 55 to preserve windows-1252 bytes % x, got % x", expectedLine55, lines[54])
+	}
+
+	if !bytes.Equal(lines[55], []byte("//banana")) {
+		t.Fatalf("expected inserted line 56 to be //banana, got %q", lines[55])
+	}
+	if !bytes.Equal(lines[56], []byte("line 56")) {
+		t.Fatalf("expected original content after edited cp1252 line to shift to line 57, got %q", lines[56])
 	}
 }
 

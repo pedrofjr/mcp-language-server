@@ -33,7 +33,7 @@ func isMethodNotSupportedError(err error) bool {
 }
 
 func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (protocol.Location, bool) {
-	searchPatterns := buildSymbolSearchPatterns(symbolName)
+	searchPatterns := buildInferredSymbolSearchPatterns(symbolName)
 	if len(searchPatterns) == 0 {
 		return protocol.Location{}, false
 	}
@@ -57,7 +57,7 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 
 		lines := strings.Split(string(content), "\n")
 		for lineIndex, line := range lines {
-			searchLine := trimSingleLineComment(line)
+			searchLine := sanitizePascalSearchLine(line)
 			for _, pattern := range searchPatterns {
 				matchRange := pattern.FindStringIndex(searchLine)
 				if matchRange == nil {
@@ -68,7 +68,8 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 				}
 
 				candidateScore := scorePotentialDeclarationLine(searchLine)
-				if strings.EqualFold(searchLine[matchRange[0]:matchRange[1]], symbolName) {
+				matchedText := searchLine[matchRange[0]:matchRange[1]]
+				if strings.EqualFold(normalizeQualifiedSymbolSeparators(matchedText), normalizeQualifiedSymbolSeparators(symbolName)) {
 					candidateScore += 2
 				}
 
@@ -100,6 +101,24 @@ func inferSymbolLocationFromOpenFiles(client *lsp.Client, symbolName string) (pr
 	}
 
 	return bestCandidate.location, true
+}
+
+func buildInferredSymbolSearchPatterns(symbolName string) []*regexp.Regexp {
+	if !isQualifiedSymbolQuery(symbolName) {
+		return buildSymbolSearchPatterns(symbolName)
+	}
+
+	owner, member, ok := splitQualifiedSymbolQuery(symbolName)
+	if !ok {
+		return nil
+	}
+
+	pattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(owner) + `(?:\.|::)` + regexp.QuoteMeta(member) + `\b`)
+	if err != nil {
+		return nil
+	}
+
+	return []*regexp.Regexp{pattern}
 }
 
 func scorePotentialDeclarationLine(line string) int {
@@ -156,6 +175,15 @@ func definitionResultToLocations(result protocol.Or_Result_textDocument_definiti
 }
 
 func buildSymbolSearchPatterns(symbolName string) []*regexp.Regexp {
+	if owner, member, ok := splitQualifiedSymbolQuery(symbolName); ok {
+		pattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(owner) + `(?:\.|::)` + regexp.QuoteMeta(member) + `\b`)
+		if err != nil {
+			return nil
+		}
+
+		return []*regexp.Regexp{pattern}
+	}
+
 	terms := []string{symbolName}
 	if strings.Contains(symbolName, ".") {
 		parts := strings.Split(symbolName, ".")
@@ -186,6 +214,64 @@ func buildSymbolSearchPatterns(symbolName string) []*regexp.Regexp {
 	}
 
 	return patterns
+}
+
+func splitQualifiedSymbolQuery(symbolName string) (string, string, bool) {
+	separatorIndex := strings.LastIndex(symbolName, ".")
+	separatorLength := 1
+
+	if doubleColonIndex := strings.LastIndex(symbolName, "::"); doubleColonIndex > separatorIndex {
+		separatorIndex = doubleColonIndex
+		separatorLength = 2
+	}
+
+	if separatorIndex <= 0 || separatorIndex+separatorLength >= len(symbolName) {
+		return "", "", false
+	}
+
+	owner := strings.TrimSpace(symbolName[:separatorIndex])
+	member := strings.TrimSpace(symbolName[separatorIndex+separatorLength:])
+	if owner == "" || member == "" {
+		return "", "", false
+	}
+
+	return owner, member, true
+}
+
+func normalizeQualifiedSymbolSeparators(symbolName string) string {
+	return strings.ReplaceAll(symbolName, "::", ".")
+}
+
+func sanitizePascalSearchLine(line string) string {
+	masked := []byte(line)
+	inStringLiteral := false
+
+	for i := 0; i < len(masked); i++ {
+		if !inStringLiteral && masked[i] == '/' && i+1 < len(masked) && masked[i+1] == '/' {
+			for j := i; j < len(masked); j++ {
+				masked[j] = ' '
+			}
+			break
+		}
+
+		if masked[i] != '\'' {
+			if inStringLiteral {
+				masked[i] = ' '
+			}
+			continue
+		}
+
+		masked[i] = ' '
+		if inStringLiteral && i+1 < len(masked) && masked[i+1] == '\'' {
+			masked[i+1] = ' '
+			i++
+			continue
+		}
+
+		inStringLiteral = !inStringLiteral
+	}
+
+	return string(masked)
 }
 
 func trimSingleLineComment(line string) string {

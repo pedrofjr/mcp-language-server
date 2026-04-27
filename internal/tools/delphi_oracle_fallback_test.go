@@ -87,6 +87,36 @@ func TestDelphiOracle_InferSymbolLocationFromOpenFiles_QualifiedCreatePrefersOwn
 	}
 }
 
+func TestDelphiOracle_ReadDefinition_QualifiedQueryWithoutOwnedDeclaration_ReturnsNotFoundInsteadOfLeafFalsePositive(t *testing.T) {
+	fixtures := map[string]string{
+		"main.pas": strings.Join([]string{
+			"constructor TFont.Create;",
+			"begin",
+			"end;",
+			"",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := client.OpenFile(ctx, filePaths["main.pas"]); err != nil {
+		t.Fatalf("falha ao abrir fixture para false positive de definition qualificado: %v", err)
+	}
+
+	result, err := ReadDefinition(ctx, client, "TBlockSocket.Create")
+	if err != nil {
+		t.Fatalf("ReadDefinition nao deveria falhar quando o fallback nao encontra owner qualificado: %v", err)
+	}
+
+	if !strings.Contains(result, "TBlockSocket.Create not found") {
+		t.Fatalf("consulta qualificada sem declaracao propria deve retornar not found em vez de casar o leaf Create errado; obtido: %s", result)
+	}
+}
+
 func TestDelphiOracle_FindReferences_FallbackWhenWorkspaceSymbolUnavailable(t *testing.T) {
 	client, filePath, cleanup := setupDelphiOracleFakeClient(t)
 	defer cleanup()

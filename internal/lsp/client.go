@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +59,9 @@ type Client struct {
 	// Files are currently opened by the LSP
 	openFiles   map[string]*OpenFileInfo
 	openFilesMu sync.RWMutex
+
+	workspaceRoot   string
+	workspaceRootMu sync.RWMutex
 }
 
 func NewClient(command string, args ...string) (*Client, error) {
@@ -309,6 +313,10 @@ func (c *Client) InitializeLSPClient(ctx context.Context, workspaceDir string) (
 	c.capabilitiesMu.Lock()
 	c.capabilities = result.Capabilities
 	c.capabilitiesMu.Unlock()
+
+	c.workspaceRootMu.Lock()
+	c.workspaceRoot = filepath.Clean(workspaceDir)
+	c.workspaceRootMu.Unlock()
 
 	if err := c.Notify(ctx, "initialized", struct{}{}); err != nil {
 		return nil, fmt.Errorf("initialized notification failed: %w", err)
@@ -585,6 +593,13 @@ func (c *Client) GetOpenFilesSnapshot() []string {
 
 	sort.Strings(openFiles)
 	return openFiles
+}
+
+func (c *Client) GetWorkspaceRoot() string {
+	c.workspaceRootMu.RLock()
+	defer c.workspaceRootMu.RUnlock()
+
+	return c.workspaceRoot
 }
 
 // CloseAllFiles closes all currently open files

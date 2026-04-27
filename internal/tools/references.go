@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -30,48 +31,58 @@ func FindReferences(ctx context.Context, client *lsp.Client, symbolName string) 
 		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
 	}
 
-	var allReferences []string
+	allReferenceLocations := make([]protocol.Location, 0)
 	attemptedLocations := make(map[string]struct{}, len(symbolLocations))
 	for _, loc := range symbolLocations {
 		attemptedLocations[referenceLocationKey(loc)] = struct{}{}
 
-		referenceBlocks, err := collectReferenceBlocks(ctx, client, loc, contextLines)
+		referenceLocations, err := collectReferenceLocations(ctx, client, loc)
 		if err != nil {
 			return "", err
 		}
 
-		allReferences = append(allReferences, referenceBlocks...)
+		allReferenceLocations = appendUniqueReferenceLocations(allReferenceLocations, referenceLocations)
 	}
 
-	if len(allReferences) == 0 {
+	if len(allReferenceLocations) == 0 {
 		retryLocations := collectOpenFileReferenceRetryLocations(client, symbolName, attemptedLocations)
 		for _, loc := range retryLocations {
 			attemptedLocations[referenceLocationKey(loc)] = struct{}{}
 
-			referenceBlocks, err := collectReferenceBlocks(ctx, client, loc, contextLines)
+			referenceLocations, err := collectReferenceLocations(ctx, client, loc)
 			if err != nil {
 				return "", err
 			}
-			if len(referenceBlocks) == 0 {
+			if len(referenceLocations) == 0 {
 				continue
 			}
 
-			allReferences = append(allReferences, referenceBlocks...)
+			allReferenceLocations = appendUniqueReferenceLocations(allReferenceLocations, referenceLocations)
 			break
 		}
 	}
 
-	if len(allReferences) == 0 {
-		referenceBlocks, err := collectLastResortOpenFileReferenceBlocks(ctx, client, symbolName, symbolLocations, contextLines)
-		if err != nil {
-			return "", err
-		}
-
-		allReferences = append(allReferences, referenceBlocks...)
+	if len(allReferenceLocations) == 0 {
+		allReferenceLocations = appendUniqueReferenceLocations(
+			allReferenceLocations,
+			collectLastResortOpenFileReferenceLocations(client, symbolName, symbolLocations),
+		)
 	}
 
-	if len(allReferences) == 0 {
+	if len(allReferenceLocations) == 0 || referenceLocationsNeedWorkspaceCompletion(allReferenceLocations, symbolLocations) {
+		allReferenceLocations = appendUniqueReferenceLocations(
+			allReferenceLocations,
+			collectLastResortWorkspaceReferenceLocations(client, symbolName, symbolLocations),
+		)
+	}
+
+	if len(allReferenceLocations) == 0 {
 		return fmt.Sprintf("No references found for symbol: %s", symbolName), nil
+	}
+
+	allReferences, err := formatReferenceBlocks(ctx, client, allReferenceLocations, contextLines)
+	if err != nil {
+		return "", err
 	}
 
 	return strings.Join(allReferences, "\n"), nil
@@ -135,7 +146,7 @@ func resolveReferenceSymbolLocations(ctx context.Context, client *lsp.Client, sy
 	return locations, nil
 }
 
-func collectReferenceBlocks(ctx context.Context, client *lsp.Client, loc protocol.Location, contextLines int) ([]string, error) {
+func collectReferenceLocations(ctx context.Context, client *lsp.Client, loc protocol.Location) ([]protocol.Location, error) {
 	if err := client.OpenFile(ctx, loc.URI.Path()); err != nil {
 		toolsLogger.Error("Error opening file: %v", err)
 		return nil, nil
@@ -157,7 +168,7 @@ func collectReferenceBlocks(ctx context.Context, client *lsp.Client, loc protoco
 		return nil, fmt.Errorf("failed to get references: %v", err)
 	}
 
-	return formatReferenceBlocks(ctx, client, refs, contextLines)
+	return refs, nil
 }
 
 func formatReferenceBlocks(ctx context.Context, client *lsp.Client, refs []protocol.Location, contextLines int) ([]string, error) {
@@ -231,6 +242,15 @@ func collectLastResortOpenFileReferenceBlocks(ctx context.Context, client *lsp.C
 	return formatReferenceBlocks(ctx, client, textualLocations, contextLines)
 }
 
+func collectLastResortWorkspaceReferenceBlocks(ctx context.Context, client *lsp.Client, symbolName string, symbolLocations []protocol.Location, contextLines int) ([]string, error) {
+	textualLocations := collectLastResortWorkspaceReferenceLocations(client, symbolName, symbolLocations)
+	if len(textualLocations) == 0 {
+		return nil, nil
+	}
+
+	return formatReferenceBlocks(ctx, client, textualLocations, contextLines)
+}
+
 func collectLastResortOpenFileReferenceLocations(client *lsp.Client, symbolName string, symbolLocations []protocol.Location) []protocol.Location {
 	searchPatterns := buildSymbolSearchPatterns(symbolName)
 	if len(searchPatterns) == 0 {
@@ -262,6 +282,120 @@ func collectLastResortOpenFileReferenceLocations(client *lsp.Client, symbolName 
 	}
 
 	return locations
+}
+
+func collectLastResortWorkspaceReferenceLocations(client *lsp.Client, symbolName string, symbolLocations []protocol.Location) []protocol.Location {
+	searchPatterns := buildSymbolSearchPatterns(symbolName)
+	if len(searchPatterns) == 0 {
+		return nil
+	}
+
+	declarationLines := make(map[string]struct{}, len(symbolLocations))
+	for _, loc := range symbolLocations {
+		declarationLines[referenceLineKey(loc)] = struct{}{}
+	}
+
+	workspaceRoots := collectReferenceWorkspaceRoots(client, symbolLocations)
+	if len(workspaceRoots) == 0 {
+		return nil
+	}
+
+	locations := make([]protocol.Location, 0)
+	seenLocations := make(map[string]struct{})
+
+	for _, root := range workspaceRoots {
+		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+
+			if entry.IsDir() {
+				if shouldSkipReferenceWorkspaceDir(entry.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if !isDelphiWorkspaceReferenceFile(path) {
+				return nil
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			uri := protocol.DocumentUri(protocol.URIFromPath(path))
+			lines := strings.Split(string(content), "\n")
+			fileLocations := findOpenFileTextualReferenceLocations(uri, lines, searchPatterns, declarationLines)
+			for _, loc := range fileLocations {
+				locationKey := referenceLocationKey(loc)
+				if _, seen := seenLocations[locationKey]; seen {
+					continue
+				}
+
+				seenLocations[locationKey] = struct{}{}
+				locations = append(locations, loc)
+			}
+
+			return nil
+		})
+	}
+
+	return locations
+}
+
+func collectReferenceWorkspaceRoots(client *lsp.Client, symbolLocations []protocol.Location) []string {
+	uniqueRoots := make(map[string]struct{})
+
+	addRoot := func(path string) {
+		if path == "" {
+			return
+		}
+
+		uniqueRoots[filepath.Clean(path)] = struct{}{}
+	}
+
+	addRoot(client.GetWorkspaceRoot())
+
+	for _, uriStr := range client.GetOpenFilesSnapshot() {
+		path, ok := uriPathFromString(uriStr)
+		if !ok {
+			continue
+		}
+
+		addRoot(filepath.Dir(path))
+	}
+
+	for _, loc := range symbolLocations {
+		addRoot(filepath.Dir(loc.URI.Path()))
+	}
+
+	roots := make([]string, 0, len(uniqueRoots))
+	for root := range uniqueRoots {
+		roots = append(roots, root)
+	}
+
+	sort.Strings(roots)
+	return roots
+}
+
+func isDelphiWorkspaceReferenceFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".pas", ".pp", ".dpr", ".dpk", ".lpr", ".inc":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSkipReferenceWorkspaceDir(name string) bool {
+	switch strings.ToLower(name) {
+	case ".git", ".hg", ".svn", "node_modules", "vendor", "target", "build", "dist":
+		return true
+	default:
+		return false
+	}
 }
 
 func collectOpenFileReferenceRetryLocations(client *lsp.Client, symbolName string, attemptedLocations map[string]struct{}) []protocol.Location {
@@ -298,7 +432,7 @@ func collectOpenFileReferenceRetryLocations(client *lsp.Client, symbolName strin
 
 func findOpenFileReferenceRetryLocation(uri protocol.DocumentUri, lines []string, searchPatterns []*regexp.Regexp, attemptedLocations map[string]struct{}) (protocol.Location, bool) {
 	for lineIndex, line := range lines {
-		searchLine := trimSingleLineComment(line)
+		searchLine := sanitizePascalSearchLine(line)
 		for _, pattern := range searchPatterns {
 			matchRange := pattern.FindStringIndex(searchLine)
 			if matchRange == nil {
@@ -328,7 +462,7 @@ func findOpenFileTextualReferenceLocations(uri protocol.DocumentUri, lines []str
 	seenLocations := make(map[string]struct{})
 
 	for lineIndex, line := range lines {
-		searchLine := trimSingleLineComment(line)
+		searchLine := sanitizePascalSearchLine(line)
 		_, declarationLine := declarationLines[referenceLineKeyForURI(uri, lineIndex)]
 
 		for _, pattern := range searchPatterns {
@@ -376,4 +510,46 @@ func referenceLineKey(loc protocol.Location) string {
 
 func referenceLineKeyForURI(uri protocol.DocumentUri, line int) string {
 	return fmt.Sprintf("%s:%d", uri, line)
+}
+
+func appendUniqueReferenceLocations(existing []protocol.Location, candidates []protocol.Location) []protocol.Location {
+	if len(candidates) == 0 {
+		return existing
+	}
+
+	seenLocations := make(map[string]struct{}, len(existing)+len(candidates))
+	for _, loc := range existing {
+		seenLocations[referenceLocationKey(loc)] = struct{}{}
+	}
+
+	for _, loc := range candidates {
+		locationKey := referenceLocationKey(loc)
+		if _, seen := seenLocations[locationKey]; seen {
+			continue
+		}
+
+		seenLocations[locationKey] = struct{}{}
+		existing = append(existing, loc)
+	}
+
+	return existing
+}
+
+func referenceLocationsNeedWorkspaceCompletion(referenceLocations []protocol.Location, symbolLocations []protocol.Location) bool {
+	if len(referenceLocations) == 0 {
+		return true
+	}
+
+	providerFiles := make(map[protocol.DocumentUri]struct{}, len(symbolLocations))
+	for _, loc := range symbolLocations {
+		providerFiles[loc.URI] = struct{}{}
+	}
+
+	for _, loc := range referenceLocations {
+		if _, providerOnly := providerFiles[loc.URI]; !providerOnly {
+			return false
+		}
+	}
+
+	return true
 }

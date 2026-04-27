@@ -8,9 +8,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/isaacphi/mcp-language-server/internal/protocol"
+	"golang.org/x/text/encoding/charmap"
 )
 
 var (
@@ -20,6 +22,16 @@ var (
 	osRemove    = os.Remove
 	osRemoveAll = os.RemoveAll
 	osRename    = os.Rename
+)
+
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+type textFileEncoding int
+
+const (
+	textFileEncodingUTF8 textFileEncoding = iota
+	textFileEncodingUTF8BOM
+	textFileEncodingWindows1252
 )
 
 func documentURIToPath(uri protocol.DocumentUri) (string, error) {
@@ -73,19 +85,21 @@ func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	fileEncoding, bom, body := classifyTextFileEncoding(content)
+
 	// Detect line ending style
 	var lineEnding string
-	if bytes.Contains(content, []byte("\r\n")) {
+	if bytes.Contains(body, []byte("\r\n")) {
 		lineEnding = "\r\n"
 	} else {
 		lineEnding = "\n"
 	}
 
 	// Track if file ends with a newline
-	endsWithNewline := len(content) > 0 && bytes.HasSuffix(content, []byte(lineEnding))
+	endsWithNewline := len(body) > 0 && bytes.HasSuffix(body, []byte(lineEnding))
 
 	// Split into lines without the endings
-	lines := strings.Split(string(content), lineEnding)
+	lines := strings.Split(string(body), lineEnding)
 
 	// Check for overlapping edits
 	for i, edit1 := range edits {
@@ -108,7 +122,15 @@ func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
 
 	// Apply each edit
 	for _, edit := range sortedEdits {
-		newLines, err := ApplyTextEdit(lines, edit, lineEnding)
+		rawNewText, err := encodeTextForFile(edit.NewText, fileEncoding)
+		if err != nil {
+			return fmt.Errorf("failed to encode new text for %s: %w", path, err)
+		}
+
+		rawEdit := edit
+		rawEdit.NewText = rawNewText
+
+		newLines, err := ApplyTextEdit(lines, rawEdit, lineEnding)
 		if err != nil {
 			return fmt.Errorf("failed to apply edit: %w", err)
 		}
@@ -129,11 +151,40 @@ func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
 		newContent.WriteString(lineEnding)
 	}
 
-	if err := osWriteFile(path, []byte(newContent.String()), 0644); err != nil {
+	updatedContent := make([]byte, 0, len(bom)+newContent.Len())
+	updatedContent = append(updatedContent, bom...)
+	updatedContent = append(updatedContent, newContent.String()...)
+
+	if err := osWriteFile(path, updatedContent, 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
 	return nil
+}
+
+func classifyTextFileEncoding(content []byte) (textFileEncoding, []byte, []byte) {
+	if bytes.HasPrefix(content, utf8BOM) {
+		return textFileEncodingUTF8BOM, utf8BOM, content[len(utf8BOM):]
+	}
+
+	if utf8.Valid(content) {
+		return textFileEncodingUTF8, nil, content
+	}
+
+	return textFileEncodingWindows1252, nil, content
+}
+
+func encodeTextForFile(newText string, encoding textFileEncoding) (string, error) {
+	if encoding != textFileEncodingWindows1252 {
+		return newText, nil
+	}
+
+	encodedText, err := charmap.Windows1252.NewEncoder().String(newText)
+	if err != nil {
+		return "", fmt.Errorf("text is not representable in Windows-1252: %w", err)
+	}
+
+	return encodedText, nil
 }
 
 // ApplyTextEdit applies a single text edit to a set of lines
