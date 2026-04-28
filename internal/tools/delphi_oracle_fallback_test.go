@@ -1121,6 +1121,310 @@ func TestDelphiOracle_GetFullDefinition_FallbackWhenDocumentSymbolUnavailable(t 
 	}
 }
 
+func TestDelphiOracle_GetFullDefinition_InterfaceFreeRoutinePrefersImplementationBlock(t *testing.T) {
+	fixtures := map[string]string{
+		"synautil.pas": strings.Join([]string{
+			"unit synautil;",
+			"",
+			"interface",
+			"",
+			"function TimeZoneBias: Integer;",
+			"",
+			"implementation",
+			"",
+			"function TimeZoneBias: Integer;",
+			"begin",
+			"  Result := 180;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["synautil.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture synautil para GetFullDefinition: %v", err)
+	}
+
+	loc := protocol.Location{
+		URI: protocol.URIFromPath(filePath),
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 4, Character: 9},
+			End:   protocol.Position{Line: 4, Character: 21},
+		},
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		t.Fatalf("GetFullDefinition nao deveria falhar ao partir da declaracao de interface TimeZoneBias: %v", err)
+	}
+
+	if gotLine := int(fullLocation.Range.Start.Line) + 1; gotLine != 9 {
+		t.Fatalf("esperado GetFullDefinition reposicionar para o header da implementacao TimeZoneBias na linha 9, mas retornou L%d com trecho: %s", gotLine, definition)
+	}
+
+	if !strings.Contains(definition, "function TimeZoneBias: Integer;") || !strings.Contains(definition, "Result := 180;") || !strings.Contains(definition, "end;") {
+		t.Fatalf("esperado bloco completo da implementacao TimeZoneBias, com header e corpo, obtido: %s", definition)
+	}
+	}
+
+func TestDelphiOracle_GetFullDefinition_InterfaceClassConstructorPrefersQualifiedImplementationBlock(t *testing.T) {
+	fixtures := map[string]string{
+		"clamsend.pas": strings.Join([]string{
+			"unit clamsend;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TClamSend = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TClamSend.Create;",
+			"begin",
+			"  Value := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["clamsend.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture clamsend para GetFullDefinition: %v", err)
+	}
+
+	loc := protocol.Location{
+		URI: protocol.URIFromPath(filePath),
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 7, Character: 16},
+			End:   protocol.Position{Line: 7, Character: 22},
+		},
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		t.Fatalf("GetFullDefinition nao deveria falhar ao partir da declaracao de interface do construtor Create: %v", err)
+	}
+
+	if gotLine := int(fullLocation.Range.Start.Line) + 1; gotLine != 13 {
+		t.Fatalf("esperado GetFullDefinition reposicionar para o header qualificado da implementacao na linha 13, mas retornou L%d com trecho: %s", gotLine, definition)
+	}
+
+	if !strings.Contains(definition, "constructor TClamSend.Create;") || !strings.Contains(definition, "Value := 1;") || !strings.Contains(definition, "end;") {
+		t.Fatalf("esperado bloco completo da implementacao qualificada do construtor Create, obtido: %s", definition)
+	}
+}
+
+func TestDelphiOracle_GetFullDefinition_ImplementationFreeRoutineHeaderExpandsToCompleteBlock(t *testing.T) {
+	fixtures := map[string]string{
+		"synautil.pas": strings.Join([]string{
+			"unit synautil;",
+			"",
+			"interface",
+			"",
+			"function TimeZoneBias: Integer;",
+			"",
+			"implementation",
+			"",
+			"function TimeZoneBias: Integer;",
+			"begin",
+			"  Result := 180;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["synautil.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture synautil para GetFullDefinition no header da implementacao: %v", err)
+	}
+
+	loc := protocol.Location{
+		URI: protocol.URIFromPath(filePath),
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 8, Character: 9},
+			End:   protocol.Position{Line: 8, Character: 21},
+		},
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		t.Fatalf("GetFullDefinition nao deveria falhar ao partir do header da implementacao TimeZoneBias: %v", err)
+	}
+
+	if gotLine := int(fullLocation.Range.Start.Line) + 1; gotLine != 9 {
+		t.Fatalf("esperado GetFullDefinition permanecer no header da implementacao TimeZoneBias na linha 9, mas retornou L%d com trecho: %s", gotLine, definition)
+	}
+
+	if gotEndLine := int(fullLocation.Range.End.Line) + 1; gotEndLine <= 9 {
+		t.Fatalf("esperado GetFullDefinition expandir o header da implementacao TimeZoneBias para o corpo completo, mas o range terminou em L%d com trecho: %s", gotEndLine, definition)
+	}
+
+	if !strings.Contains(definition, "function TimeZoneBias: Integer;") || !strings.Contains(definition, "Result := 180;") || !strings.Contains(definition, "end;") {
+		t.Fatalf("esperado bloco completo da implementacao TimeZoneBias ao partir do proprio header, obtido: %s", definition)
+	}
+}
+
+func TestDelphiOracle_GetFullDefinition_ImplementationQualifiedConstructorHeaderExpandsToCompleteBlock(t *testing.T) {
+	fixtures := map[string]string{
+		"blcksock.pas": strings.Join([]string{
+			"unit blcksock;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TBlockSocket = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TBlockSocket.Create;",
+			"begin",
+			"  Sock := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["blcksock.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture blcksock para GetFullDefinition no header da implementacao qualificada: %v", err)
+	}
+
+	loc := protocol.Location{
+		URI: protocol.URIFromPath(filePath),
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 12, Character: 25},
+			End:   protocol.Position{Line: 12, Character: 31},
+		},
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		t.Fatalf("GetFullDefinition nao deveria falhar ao partir do header da implementacao qualificada TBlockSocket.Create: %v", err)
+	}
+
+	if gotLine := int(fullLocation.Range.Start.Line) + 1; gotLine != 13 {
+		t.Fatalf("esperado GetFullDefinition permanecer no header qualificado da implementacao TBlockSocket.Create na linha 13, mas retornou L%d com trecho: %s", gotLine, definition)
+	}
+
+	if gotEndLine := int(fullLocation.Range.End.Line) + 1; gotEndLine <= 13 {
+		t.Fatalf("esperado GetFullDefinition expandir o header qualificado TBlockSocket.Create para o corpo completo, mas o range terminou em L%d com trecho: %s", gotEndLine, definition)
+	}
+
+	if !strings.Contains(definition, "constructor TBlockSocket.Create;") || !strings.Contains(definition, "Sock := 1;") || !strings.Contains(definition, "end;") {
+		t.Fatalf("esperado bloco completo da implementacao qualificada TBlockSocket.Create ao partir do proprio header, obtido: %s", definition)
+	}
+}
+
+func TestDelphiOracle_GetFullDefinition_InterfaceFreeRoutineWithPreprocessorBranchesPrefersImplementationBlock(t *testing.T) {
+	fixtures := map[string]string{
+		"synautil.pas": strings.Join([]string{
+			"unit synautil;",
+			"",
+			"interface",
+			"",
+			"function TimeZoneBias: Integer;",
+			"",
+			"implementation",
+			"",
+			"function TimeZoneBias: Integer;",
+			"{$IFNDEF MSWINDOWS}",
+			"{$IFNDEF FPC}",
+			"var",
+			"  Bias: Integer;",
+			"begin",
+			"  Bias := 180;",
+			"  Result := Bias;",
+			"{$ELSE}",
+			"begin",
+			"  Result := 240;",
+			"{$ENDIF}",
+			"{$ELSE}",
+			"var",
+			"  AltBias: Integer;",
+			"begin",
+			"  case AltBias of",
+			"    0: Result := 0;",
+			"  else",
+			"    Result := -60;",
+			"  end;",
+			"{$ENDIF}",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["synautil.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture synautil com preprocessor para GetFullDefinition: %v", err)
+	}
+
+	loc := protocol.Location{
+		URI: protocol.URIFromPath(filePath),
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 4, Character: 9},
+			End:   protocol.Position{Line: 4, Character: 21},
+		},
+	}
+
+	definition, fullLocation, err := GetFullDefinition(ctx, client, loc)
+	if err != nil {
+		t.Fatalf("GetFullDefinition nao deveria falhar ao promover TimeZoneBias da interface para a implementacao com branches condicionais: %v", err)
+	}
+
+	if gotLine := int(fullLocation.Range.Start.Line) + 1; gotLine != 9 {
+		t.Fatalf("esperado GetFullDefinition promover TimeZoneBias para o header da implementacao na linha 9, mas retornou L%d com trecho: %s", gotLine, definition)
+	}
+
+	if gotEndLine := int(fullLocation.Range.End.Line) + 1; gotEndLine <= 9 {
+		t.Fatalf("esperado GetFullDefinition expandir TimeZoneBias com preprocessor ate o fim do bloco de implementacao, mas o range terminou em L%d com trecho: %s", gotEndLine, definition)
+	}
+
+	if !strings.Contains(definition, "function TimeZoneBias: Integer;") || !strings.Contains(definition, "Bias := 180;") || !strings.Contains(definition, "Result := 240;") || !strings.Contains(definition, "case AltBias of") || !strings.Contains(definition, "end;") {
+		t.Fatalf("esperado bloco completo da implementacao TimeZoneBias com branches condicionais, obtido: %s", definition)
+	}
+}
+
 func TestDelphiOracle_RenameSymbol_ErrorClaroQuandoRenameProviderAusente(t *testing.T) {
 	client, filePath, cleanup := setupDelphiOracleFakeClient(t)
 	defer cleanup()
