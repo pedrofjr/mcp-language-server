@@ -19,12 +19,14 @@ import (
 )
 
 const (
-	fakeLSPEnv                         = "MCP_FAKE_LSP_DELPHI_ORACLE"
-	fakeLSPWorkspaceSymbolProviderEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_PROVIDER"
-	fakeLSPWorkspaceSymbolEmptyEnv    = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_EMPTY_RESULT"
-	fakeLSPWorkspaceSymbolIrrelevantEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_IRRELEVANT_RESULT"
-	fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_MATCHED_BUT_UNSUSTAINED_RESULT"
-	fakeLSPReferencesPayloadEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_REFERENCES_PAYLOAD"
+	fakeLSPEnv                                      = "MCP_FAKE_LSP_DELPHI_ORACLE"
+	fakeLSPWorkspaceSymbolProviderEnv               = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_PROVIDER"
+	fakeLSPWorkspaceSymbolEmptyEnv                  = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_EMPTY_RESULT"
+	fakeLSPWorkspaceSymbolIrrelevantEnv             = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_IRRELEVANT_RESULT"
+	fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv  = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_MATCHED_BUT_UNSUSTAINED_RESULT"
+	fakeLSPWorkspaceSymbolQualifiedTypeAmbiguousEnv = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_QUALIFIED_TYPE_AMBIGUOUS_RESULT"
+	fakeLSPWorkspaceSymbolQualifiedTypeNoStrongEnv  = "MCP_FAKE_LSP_DELPHI_ORACLE_WORKSPACE_SYMBOL_QUALIFIED_TYPE_NO_STRONG_RESULT"
+	fakeLSPReferencesPayloadEnv                     = "MCP_FAKE_LSP_DELPHI_ORACLE_REFERENCES_PAYLOAD"
 )
 
 var fakeLSPReferenceLinePattern = regexp.MustCompile(`L(\d+):C\d+`)
@@ -71,10 +73,10 @@ func TestDelphiOracle_ReadDefinition_QualifiedQueryFallsBackWhenWorkspaceSymbolR
 	t.Setenv(fakeLSPWorkspaceSymbolIrrelevantEnv, "1")
 
 	testCases := []struct {
-		name      string
-		fileName  string
-		symbol    string
-		content   string
+		name        string
+		fileName    string
+		symbol      string
+		content     string
 		mustContain string
 	}{
 		{
@@ -285,6 +287,207 @@ func TestDelphiOracle_ReadDefinition_QualifiedQueryFallsBackWhenMatchedWorkspace
 				t.Fatalf("esperado definition incluir a declaracao %q apos fallback Delphi final; obtido: %s", testCase.mustContain, result)
 			}
 		})
+	}
+}
+
+func TestDelphiOracle_ReadDefinition_QualifiedTypePrefersClassDeclarationOverConstructorWorkspaceSymbol(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolQualifiedTypeAmbiguousEnv, "1")
+
+	fixtures := map[string]string{
+		"blcksock.pas": strings.Join([]string{
+			"unit blcksock;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TBlockSocket = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TBlockSocket.Create;",
+			"begin",
+			"  Sock := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["blcksock.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture blcksock para selection de definition qualificada por tipo: %v", err)
+	}
+
+	result, err := ReadDefinition(ctx, client, "blcksock.TBlockSocket")
+	if err != nil {
+		t.Fatalf("ReadDefinition nao deveria falhar com workspace/symbol ambiguo para tipo qualificado: %v", err)
+	}
+
+	if !strings.Contains(result, "TBlockSocket = class") {
+		t.Fatalf("esperado definition qualificada de tipo retornar declaracao de classe TBlockSocket, obtido: %s", result)
+	}
+
+	if strings.Contains(result, "constructor TBlockSocket.Create;") {
+		t.Fatalf("consulta qualificada de tipo blcksock.TBlockSocket nao deve selecionar construtor Create vindo de workspace/symbol ambiguo; obtido: %s", result)
+	}
+}
+
+func TestDelphiOracle_ReadDefinition_QualifiedTypeFallbackWithoutWorkspaceSymbolPrefersClassDeclarationOverConstructor(t *testing.T) {
+	fixtures := map[string]string{
+		"blcksock.pas": strings.Join([]string{
+			"unit blcksock;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TBlockSocket = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TBlockSocket.Create;",
+			"begin",
+			"  Sock := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["blcksock.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture blcksock para fallback de definition sem workspace/symbol: %v", err)
+	}
+
+	result, err := ReadDefinition(ctx, client, "blcksock.TBlockSocket")
+	if err != nil {
+		t.Fatalf("ReadDefinition nao deveria falhar no fallback Delphi sem workspace/symbol para tipo qualificado: %v", err)
+	}
+
+	if !strings.Contains(result, "TBlockSocket = class") {
+		t.Fatalf("esperado fallback Delphi sem workspace/symbol retornar declaracao de classe TBlockSocket, obtido: %s", result)
+	}
+
+	if strings.Contains(result, "constructor TBlockSocket.Create;") {
+		t.Fatalf("fallback Delphi sem workspace/symbol para blcksock.TBlockSocket nao deve selecionar construtor Create; obtido: %s", result)
+	}
+}
+
+func TestDelphiOracle_ReadDefinition_QualifiedMemberQueryContinuesResolvingMethod(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolQualifiedTypeAmbiguousEnv, "1")
+
+	fixtures := map[string]string{
+		"blcksock.pas": strings.Join([]string{
+			"unit blcksock;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TBlockSocket = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TBlockSocket.Create;",
+			"begin",
+			"  Sock := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["blcksock.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture blcksock para definition qualificada de metodo: %v", err)
+	}
+
+	result, err := ReadDefinition(ctx, client, "blcksock.TBlockSocket.Create")
+	if err != nil {
+		t.Fatalf("ReadDefinition nao deveria falhar para query qualificada de metodo Unit.Type.Method: %v", err)
+	}
+
+	if !strings.Contains(result, "constructor TBlockSocket.Create;") {
+		t.Fatalf("esperado definition qualificada Unit.Type.Method continuar resolvendo o metodo Create, obtido: %s", result)
+	}
+}
+
+func TestDelphiOracle_ReadDefinition_QualifiedTypeQueryWithoutStrongTypeFallsBackToBestAvailableKind(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolQualifiedTypeNoStrongEnv, "1")
+
+	fixtures := map[string]string{
+		"blcksock.pas": strings.Join([]string{
+			"unit blcksock;",
+			"",
+			"interface",
+			"",
+			"type",
+			"  TBlockSocket = class",
+			"  public",
+			"    constructor Create;",
+			"  end;",
+			"",
+			"implementation",
+			"",
+			"constructor TBlockSocket.Create;",
+			"begin",
+			"  Sock := 1;",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["blcksock.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir fixture blcksock para definition qualificada sem tipo forte: %v", err)
+	}
+
+	result, err := ReadDefinition(ctx, client, "blcksock.TBlockSocket")
+	if err != nil {
+		t.Fatalf("ReadDefinition nao deveria falhar quando A.B nao tem kind de tipo forte no workspace/symbol: %v", err)
+	}
+
+	if strings.Contains(result, "not found") {
+		t.Fatalf("esperado fallback de ranking para melhor candidato disponivel quando tipo forte nao existe para A.B; obtido: %s", result)
+	}
+
+	if !strings.Contains(result, "constructor TBlockSocket.Create;") {
+		t.Fatalf("esperado A.B sem tipo forte manter fallback compativel e resolver candidato de membro disponivel, obtido: %s", result)
 	}
 }
 
@@ -1172,7 +1375,7 @@ func TestDelphiOracle_GetFullDefinition_InterfaceFreeRoutinePrefersImplementatio
 	if !strings.Contains(definition, "function TimeZoneBias: Integer;") || !strings.Contains(definition, "Result := 180;") || !strings.Contains(definition, "end;") {
 		t.Fatalf("esperado bloco completo da implementacao TimeZoneBias, com header e corpo, obtido: %s", definition)
 	}
-	}
+}
 
 func TestDelphiOracle_GetFullDefinition_InterfaceClassConstructorPrefersQualifiedImplementationBlock(t *testing.T) {
 	fixtures := map[string]string{
@@ -1766,6 +1969,8 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 	returnsEmptyWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolEmptyEnv) == "1"
 	returnsIrrelevantWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolIrrelevantEnv) == "1"
 	returnsMatchedButUnsustainedWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv) == "1"
+	returnsQualifiedTypeAmbiguousWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolQualifiedTypeAmbiguousEnv) == "1"
+	returnsQualifiedTypeNoStrongWorkspaceSymbol := os.Getenv(fakeLSPWorkspaceSymbolQualifiedTypeNoStrongEnv) == "1"
 	customReferenceRanges := loadFakeDelphiOracleReferenceRanges()
 	openedURI := ""
 	workspaceRoot := ""
@@ -1834,6 +2039,26 @@ func runDelphiOracleFakeLSP(stdin *os.File, stdout *os.File) {
 		case "workspace/symbol":
 			if returnsEmptyWorkspaceSymbol {
 				sendFakeResponse(writer, msg.ID, []map[string]any{}, nil)
+				break
+			}
+
+			if returnsQualifiedTypeAmbiguousWorkspaceSymbol {
+				var params struct {
+					Query string `json:"query"`
+				}
+				_ = json.Unmarshal(msg.Params, &params)
+
+				sendFakeResponse(writer, msg.ID, buildDelphiOracleQualifiedTypeAmbiguousWorkspaceSymbols(params.Query, openedURI), nil)
+				break
+			}
+
+			if returnsQualifiedTypeNoStrongWorkspaceSymbol {
+				var params struct {
+					Query string `json:"query"`
+				}
+				_ = json.Unmarshal(msg.Params, &params)
+
+				sendFakeResponse(writer, msg.ID, buildDelphiOracleQualifiedTypeNoStrongWorkspaceSymbols(params.Query, openedURI), nil)
 				break
 			}
 
@@ -2000,6 +2225,86 @@ func buildDelphiOracleMatchedButUnsustainedWorkspaceSymbols(query string, worksp
 			"name":     query,
 			"kind":     12,
 			"location": location,
+		},
+	}
+}
+
+func buildDelphiOracleQualifiedTypeAmbiguousWorkspaceSymbols(query string, openedURI string) []map[string]any {
+	normalizedQuery := strings.ToLower(normalizeQualifiedSymbolSeparators(query))
+	if normalizedQuery == "blcksock.tblocksocket.create" {
+		constructorLocation := map[string]any{
+			"uri": openedURI,
+			"range": map[string]any{
+				"start": map[string]any{"line": 12, "character": 12},
+				"end":   map[string]any{"line": 12, "character": 24},
+			},
+		}
+
+		return []map[string]any{
+			{
+				"name":          "Create",
+				"kind":          9,
+				"containerName": "blcksock.TBlockSocket",
+				"location":      constructorLocation,
+			},
+		}
+	}
+
+	if normalizedQuery != "blcksock.tblocksocket" {
+		return buildDelphiOracleIrrelevantWorkspaceSymbols(query, openedURI)
+	}
+
+	classLocation := map[string]any{
+		"uri": openedURI,
+		"range": map[string]any{
+			"start": map[string]any{"line": 5, "character": 2},
+			"end":   map[string]any{"line": 5, "character": 14},
+		},
+	}
+
+	constructorLocation := map[string]any{
+		"uri": openedURI,
+		"range": map[string]any{
+			"start": map[string]any{"line": 12, "character": 12},
+			"end":   map[string]any{"line": 12, "character": 24},
+		},
+	}
+
+	return []map[string]any{
+		{
+			"name":          "TBlockSocket",
+			"kind":          9,
+			"containerName": "blcksock",
+			"location":      constructorLocation,
+		},
+		{
+			"name":          "TBlockSocket",
+			"kind":          5,
+			"containerName": "blcksock",
+			"location":      classLocation,
+		},
+	}
+}
+
+func buildDelphiOracleQualifiedTypeNoStrongWorkspaceSymbols(query string, openedURI string) []map[string]any {
+	if !strings.EqualFold(normalizeQualifiedSymbolSeparators(query), "blcksock.tblocksocket") {
+		return buildDelphiOracleIrrelevantWorkspaceSymbols(query, openedURI)
+	}
+
+	constructorLocation := map[string]any{
+		"uri": openedURI,
+		"range": map[string]any{
+			"start": map[string]any{"line": 12, "character": 12},
+			"end":   map[string]any{"line": 12, "character": 24},
+		},
+	}
+
+	return []map[string]any{
+		{
+			"name":          "TBlockSocket",
+			"kind":          9,
+			"containerName": "blcksock",
+			"location":      constructorLocation,
 		},
 	}
 }

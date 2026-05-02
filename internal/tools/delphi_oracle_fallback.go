@@ -394,14 +394,15 @@ func buildDelphiProviderSearchPatterns(symbolName string) ([]delphiSearchPattern
 		return patterns, preferredProviders
 	}
 
+	// For Unit.Symbol lookups, prefer type declarations over homonymous routines.
+	typePattern := compileSearchPattern(`(?i)\b` + regexp.QuoteMeta(member) + `\s*=\s*(?:class|record|interface|object)\b`)
+	if typePattern != nil {
+		patterns = append(patterns, delphiSearchPattern{regex: typePattern, scoreBonus: 6, declarationOnly: true})
+	}
+
 	routinePattern := compileSearchPattern(`(?i)\b(?:class\s+)?(?:function|procedure|constructor|destructor|property|operator)\s+` + regexp.QuoteMeta(member) + `\b`)
 	if routinePattern != nil {
 		patterns = append(patterns, delphiSearchPattern{regex: routinePattern, scoreBonus: 4, declarationOnly: true})
-	}
-
-	typePattern := compileSearchPattern(`(?i)\b` + regexp.QuoteMeta(member) + `\s*=\s*(?:class|record|interface|object)\b`)
-	if typePattern != nil {
-		patterns = append(patterns, delphiSearchPattern{regex: typePattern, scoreBonus: 3, declarationOnly: true})
 	}
 
 	return patterns, preferredProviders
