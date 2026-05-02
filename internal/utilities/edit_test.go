@@ -1370,6 +1370,47 @@ func TestApplyWorkspaceEdit_InvalidURIInChanges_ReturnsClearErrorNoPanic(t *test
 	}
 }
 
+func TestApplyWorkspaceEdit_WriteNoOpSuccess_StillMustMutateFile(t *testing.T) {
+	mfs := &mockFileSystem{
+		files: map[string][]byte{
+			"/tmp/external.txt": []byte("line one\nline two\n"),
+		},
+	}
+	cleanup := setupMockFileSystem(t, mfs)
+	defer cleanup()
+
+	// Simulate a lower layer that reports write success but does not persist bytes.
+	osWriteFile = func(filename string, data []byte, perm os.FileMode) error {
+		return nil
+	}
+
+	err := ApplyWorkspaceEdit(protocol.WorkspaceEdit{
+		Changes: map[protocol.DocumentUri][]protocol.TextEdit{
+			"file:///tmp/external.txt": {
+				{
+					Range: protocol.Range{
+						Start: protocol.Position{Line: 0, Character: 0},
+						End:   protocol.Position{Line: 0, Character: 8},
+					},
+					NewText: "updated",
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected workspace edit to fail when write reports success but content is not persisted")
+	}
+
+	if !strings.Contains(err.Error(), "persisted content mismatch") {
+		t.Fatalf("expected persisted content mismatch error, got: %v", err)
+	}
+
+	content := string(mfs.files["/tmp/external.txt"])
+	if content != "line one\nline two\n" {
+		t.Fatalf("expected file content to remain unchanged after failed persistence, got %q", content)
+	}
+}
+
 func TestDocumentURIToPath_WindowsDriveURIFormats(t *testing.T) {
 	tests := []struct {
 		name string

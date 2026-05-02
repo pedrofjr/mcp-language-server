@@ -137,6 +137,64 @@ func TestApplyTextEdits_AcceptsFileURIInput(t *testing.T) {
 	}
 }
 
+func TestApplyTextEdits_ExternalAbsolutePathOutsideWorkspace_PersistsContentToDisk(t *testing.T) {
+	workspaceDir := t.TempDir()
+	externalDir := t.TempDir()
+	filePath := filepath.Join(externalDir, "outside_workspace.go")
+	initialContent := "line one\nline two\n"
+	if err := os.WriteFile(filePath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("failed to write external fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	result, err := ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 1,
+		EndLine:   1,
+		NewText:   "updated outside workspace",
+	}})
+	if err != nil {
+		t.Fatalf("expected ApplyTextEdits to succeed for absolute path outside workspace, got error: %v", err)
+	}
+
+	if result == "" {
+		t.Fatalf("expected non-empty success result message for external edit")
+	}
+
+	updatedContent, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read external file after edit: %v", err)
+	}
+
+	expectedContent := "updated outside workspace\nline two\n"
+	if string(updatedContent) != expectedContent {
+		t.Fatalf("expected external absolute path edit to persist on disk; expected %q, got %q", expectedContent, string(updatedContent))
+	}
+}
+
 func TestApplyTextEdits_SingleLineEdit_PersistsContentToDisk(t *testing.T) {
 	workspaceDir := t.TempDir()
 	filePath := filepath.Join(workspaceDir, "single_line.txt")

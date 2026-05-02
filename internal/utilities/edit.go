@@ -159,6 +159,15 @@ func ApplyTextEdits(uri protocol.DocumentUri, edits []protocol.TextEdit) error {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
+	persistedContent, err := osReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to verify persisted file content: %w", err)
+	}
+
+	if !bytes.Equal(persistedContent, updatedContent) {
+		return fmt.Errorf("file write reported success but persisted content mismatch for %s", path)
+	}
+
 	return nil
 }
 
