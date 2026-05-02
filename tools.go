@@ -363,6 +363,81 @@ func (s *mcpServer) registerTools() error {
 		return mcp.NewToolResultText(text), nil
 	})
 
+	// workspace_symbols
+	s.mcpServer.AddTool(
+		mcp.NewTool("workspace_symbols",
+			mcp.WithDescription("Search for symbols (types, functions, constants, variables) across the entire Delphi workspace by name or substring. Returns name, kind, and file location for each match."),
+			mcp.WithString("query",
+				mcp.Description("Substring to filter symbols (case-insensitive). Leave empty to list all exported symbols."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			queryRaw := req.Params.Arguments["query"]
+			if queryRaw != nil {
+				if _, ok := queryRaw.(string); !ok {
+					return mcp.NewToolResultError("query must be a string"), nil
+				}
+			}
+			query, _ := queryRaw.(string)
+			result, err := tools.GetWorkspaceSymbols(s.ctx, s.lspClient, query)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// ast_summary
+	s.mcpServer.AddTool(
+		mcp.NewTool("ast_summary",
+			mcp.WithDescription("Returns the interface structure of a Delphi unit (types, routines, constants, variables) without routine bodies. Useful for understanding unit API without reading the full source."),
+			mcp.WithString("uri",
+				mcp.Required(),
+				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			uri, ok := req.Params.Arguments["uri"].(string)
+			if !ok || uri == "" {
+				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+			}
+			result, err := tools.GetAstSummary(s.ctx, s.lspClient, uri)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// dependency_tree
+	s.mcpServer.AddTool(
+		mcp.NewTool("dependency_tree",
+			mcp.WithDescription("Returns the dependency graph for a Delphi unit. Use direction='imports' to see what the unit depends on, or direction='importedBy' to see what depends on it."),
+			mcp.WithString("uri",
+				mcp.Required(),
+				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
+			),
+			mcp.WithString("direction",
+				mcp.Description("'imports' (default) to show dependencies, or 'importedBy' for reverse dependencies"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			uri, ok := req.Params.Arguments["uri"].(string)
+			if !ok || uri == "" {
+				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+			}
+			direction, _ := req.Params.Arguments["direction"].(string)
+			if direction != "" && direction != "imports" && direction != "importedBy" {
+				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+			}
+			result, err := tools.GetDependencyTree(s.ctx, s.lspClient, uri, direction)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
 	coreLogger.Info("Successfully registered all MCP tools")
 	return nil
 }
