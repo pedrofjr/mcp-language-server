@@ -61,8 +61,13 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 	// Validate and convert all ranges before opening/changing the file.
 	textEdits := make([]protocol.TextEdit, 0, len(orderedEdits))
 	for _, requestedEdit := range orderedEdits {
+		adjustedEdit, err := adjustEditForResidualDuplicate(normalizedPath, requestedEdit)
+		if err != nil {
+			return "", fmt.Errorf("invalid position: %v", err)
+		}
+
 		// Get the range covering the requested lines
-		rng, err := getRange(requestedEdit.StartLine, requestedEdit.EndLine, normalizedPath)
+		rng, err := getRange(adjustedEdit.StartLine, adjustedEdit.EndLine, normalizedPath)
 		if err != nil {
 			return "", fmt.Errorf("invalid position: %v", err)
 		}
@@ -70,7 +75,7 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 		// Always do a replacement
 		textEdits = append(textEdits, protocol.TextEdit{
 			Range:   rng,
-			NewText: requestedEdit.NewText,
+			NewText: adjustedEdit.NewText,
 		})
 	}
 
@@ -94,6 +99,64 @@ func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, ed
 	}
 
 	return fmt.Sprintf("Successfully applied text edits. %d lines removed, %d lines added.", linesRemovedSorted, linesAddedSorted), nil
+}
+
+func adjustEditForResidualDuplicate(filePath string, edit TextEdit) (TextEdit, error) {
+	if edit.StartLine >= edit.EndLine {
+		return edit, nil
+	}
+
+	replacementLines := splitLinesAnyEnding(edit.NewText)
+	lastReplacementLine := lastNonEmptyLine(replacementLines)
+	if strings.TrimSpace(lastReplacementLine) == "" {
+		return edit, nil
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return TextEdit{}, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fileLines := splitLinesAnyEnding(string(content))
+	nextLineIndex := edit.EndLine
+	if nextLineIndex < 0 || nextLineIndex >= len(fileLines) {
+		return edit, nil
+	}
+
+	if strings.TrimSpace(fileLines[nextLineIndex]) == strings.TrimSpace(lastReplacementLine) {
+		adjusted := edit
+		adjusted.EndLine = edit.EndLine + 1
+		return adjusted, nil
+	}
+
+	blockCloserLine := strings.TrimSpace(fileLines[nextLineIndex])
+	lineAfterCloserIndex := nextLineIndex + 1
+	if (blockCloserLine == "end;" || blockCloserLine == "end") && lineAfterCloserIndex < len(fileLines) {
+		if strings.TrimSpace(fileLines[lineAfterCloserIndex]) == strings.TrimSpace(lastReplacementLine) {
+			adjusted := edit
+			adjusted.EndLine = edit.EndLine + 2
+			adjusted.NewText = strings.TrimRight(adjusted.NewText, "\r\n") + "\n" + fileLines[nextLineIndex]
+			return adjusted, nil
+		}
+	}
+
+	return edit, nil
+}
+
+func splitLinesAnyEnding(content string) []string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	return strings.Split(content, "\n")
+}
+
+func lastNonEmptyLine(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+
+	return ""
 }
 
 // getRange creates a protocol.Range that covers the specified start and end lines

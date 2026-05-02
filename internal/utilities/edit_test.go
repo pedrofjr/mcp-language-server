@@ -777,6 +777,113 @@ func TestApplyTextEdits_CRLFMultiLineReplacementWithoutTrailingNewline_DoesNotDe
 	}
 }
 
+func TestApplyTextEdits_RenameLikeReplacement_PathWithSpace_PersistsExactToken(t *testing.T) {
+	baseDir := t.TempDir()
+	spaceDir := filepath.Join(baseDir, "consumer with space")
+	if err := os.MkdirAll(spaceDir, 0o755); err != nil {
+		t.Fatalf("failed to create directory with space: %v", err)
+	}
+
+	filePath := filepath.Join(spaceDir, "uconsumer.pas")
+	line := "  s := GetHighlightersFilter(fHighlighters);"
+	if err := os.WriteFile(filePath, []byte(line), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	oldName := "GetHighlightersFilter"
+	newName := "GetHighlightersFilterStr"
+	start := strings.Index(line, oldName)
+	if start < 0 {
+		t.Fatalf("failed to find symbol %q in test line %q", oldName, line)
+	}
+	end := start + len(oldName)
+
+	err := ApplyTextEdits(protocol.URIFromPath(filePath), []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: uint32(start)},
+			End:   protocol.Position{Line: 0, Character: uint32(end)},
+		},
+		NewText: newName,
+	}})
+	if err != nil {
+		t.Fatalf("expected rename-like text edit to succeed, got error: %v", err)
+	}
+
+	gotBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read updated file: %v", err)
+	}
+
+	got := string(gotBytes)
+	want := "  s := GetHighlightersFilterStr(fHighlighters);"
+	if got != want {
+		t.Fatalf("unexpected file content after rename-like edit; got %q, want %q", got, want)
+	}
+
+	if strings.Contains(got, "GetHighlGetHighlightersFilterStr") {
+		t.Fatalf("invalid duplicated token artifact detected after edit: %q", got)
+	}
+}
+
+func TestApplyWorkspaceEdit_RenameLikeCrossFileConsumers_PathWithSpace_PersistsExactToken(t *testing.T) {
+	baseDir := t.TempDir()
+	spaceDir := filepath.Join(baseDir, "consumers with space")
+	if err := os.MkdirAll(spaceDir, 0o755); err != nil {
+		t.Fatalf("failed to create consumers directory with space: %v", err)
+	}
+
+	line := "  s := GetHighlightersFilter(fHighlighters);"
+	oldName := "GetHighlightersFilter"
+	newName := "GetHighlightersFilterStr"
+	start := strings.Index(line, oldName)
+	if start < 0 {
+		t.Fatalf("failed to find symbol %q in test line %q", oldName, line)
+	}
+	end := start + len(oldName)
+
+	paths := []string{
+		filepath.Join(spaceDir, "consumer1.pas"),
+		filepath.Join(spaceDir, "consumer2.pas"),
+		filepath.Join(baseDir, "consumer3.pas"),
+	}
+
+	changes := make(map[protocol.DocumentUri][]protocol.TextEdit, len(paths))
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+			t.Fatalf("failed to write consumer fixture %q: %v", path, err)
+		}
+
+		changes[protocol.URIFromPath(path)] = []protocol.TextEdit{{
+			Range: protocol.Range{
+				Start: protocol.Position{Line: 0, Character: uint32(start)},
+				End:   protocol.Position{Line: 0, Character: uint32(end)},
+			},
+			NewText: newName,
+		}}
+	}
+
+	err := ApplyWorkspaceEdit(protocol.WorkspaceEdit{Changes: changes})
+	if err != nil {
+		t.Fatalf("expected workspace edit application to succeed, got error: %v", err)
+	}
+
+	want := "  s := GetHighlightersFilterStr(fHighlighters);"
+	for _, path := range paths {
+		gotBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("failed to read updated consumer file %q: %v", path, err)
+		}
+
+		got := string(gotBytes)
+		if got != want {
+			t.Fatalf("unexpected consumer content after workspace rename-like edit at %q; got %q, want %q", path, got, want)
+		}
+		if strings.Contains(got, "GetHighlGetHighlightersFilterStr") {
+			t.Fatalf("invalid duplicated token artifact detected at %q: %q", path, got)
+		}
+	}
+}
+
 func TestApplyTextEdits_CRLFMultiLineReplacementWithCRLFNewText_CanBeRevertedWithoutDamagingFooter(t *testing.T) {
 	mfs := &mockFileSystem{
 		files: map[string][]byte{

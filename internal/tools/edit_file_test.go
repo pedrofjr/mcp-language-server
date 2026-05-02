@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,6 +428,186 @@ func TestApplyTextEdits_CP1252NoBOMLineSplit_PreservesWindows1252BytesAndInserts
 	}
 	if !bytes.Equal(lines[56], []byte("line 56")) {
 		t.Fatalf("expected original content after edited cp1252 line to shift to line 57, got %q", lines[56])
+	}
+}
+
+func TestDelphiEditFileMultilineReportsSuccessButDoesNotPersistWhenFileIsClosed(t *testing.T) {
+	workspaceDir := t.TempDir()
+	spacedDir := filepath.Join(workspaceDir, "samples with space")
+	if err := os.MkdirAll(spacedDir, 0o755); err != nil {
+		t.Fatalf("failed to create fixture directory with spaces: %v", err)
+	}
+
+	filePath := filepath.Join(spacedDir, "sample - long loop.pas")
+	originalContent := strings.Join([]string{
+		"unit Sample;",
+		"begin",
+		"  i := 0;",
+		"  while i < 3 do",
+		"  begin",
+		"    Inc(i);",
+		"  end;",
+		"end.",
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(filePath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("failed to write multiline fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	replacement := strings.Join([]string{
+		"  i := 1;",
+		"  while i < 5 do",
+		"  begin",
+		"    Inc(i, 2);",
+		"",
+	}, "\r\n")
+
+	result, err := ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 3,
+		EndLine:   5,
+		NewText:   replacement,
+	}})
+
+	updatedContent, readErr := os.ReadFile(filePath)
+	if readErr != nil {
+		t.Fatalf("failed to read multiline fixture file after edit attempt: %v", readErr)
+	}
+
+	if err != nil {
+		if string(updatedContent) != originalContent {
+			t.Fatalf("expected file content to remain unchanged when edit returns error; got %q", string(updatedContent))
+		}
+		return
+	}
+
+	if !strings.Contains(result, "Successfully applied text edits") {
+		t.Fatalf("expected success result message to indicate applied text edits, got %q", result)
+	}
+
+	expectedContent := strings.Join([]string{
+		"unit Sample;",
+		"begin",
+		"  i := 1;",
+		"  while i < 5 do",
+		"  begin",
+		"    Inc(i, 2);",
+		"    Inc(i);",
+		"  end;",
+		"end.",
+		"",
+	}, "\r\n")
+
+	if string(updatedContent) != expectedContent {
+		t.Fatalf("edit reported success but persisted content did not match expected output; expected %q, got %q", expectedContent, string(updatedContent))
+	}
+}
+
+func TestDelphiEditFile_LongLoopRange7To9_DoesNotLeaveResidualResultLineOutsideLoop(t *testing.T) {
+	workspaceDir := t.TempDir()
+	spacedDir := filepath.Join(workspaceDir, "samples with space")
+	if err := os.MkdirAll(spacedDir, 0o755); err != nil {
+		t.Fatalf("failed to create fixture directory with spaces: %v", err)
+	}
+
+	filePath := filepath.Join(spacedDir, "sample - long loop.pas")
+	originalContent := strings.Join([]string{
+		"unit SampleLongLoop;",
+		"",
+		"procedure RunLongLoop;",
+		"var",
+		"  i: Integer;",
+		"begin",
+		"  for i := 1 to 1000 do",
+		"  // result update",
+		"  Result := square(i);",
+		"  end;",
+		"  Result := square(i);",
+		"end;",
+		"",
+	}, "\r\n")
+	if err := os.WriteFile(filePath, []byte(originalContent), 0o644); err != nil {
+		t.Fatalf("failed to write long loop fixture file: %v", err)
+	}
+
+	t.Setenv(editFileFakeLSPEnv, "1")
+
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("failed to resolve test binary path: %v", err)
+	}
+
+	client, err := lsp.NewClient(execPath, "-test.run=TestHelperProcessEditFileFakeLSP")
+	if err != nil {
+		t.Fatalf("failed to start fake LSP: %v", err)
+	}
+	defer func() {
+		if client.Cmd != nil && client.Cmd.Process != nil {
+			_ = client.Cmd.Process.Kill()
+			_, _ = client.Cmd.Process.Wait()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := client.InitializeLSPClient(ctx, workspaceDir); err != nil {
+		t.Fatalf("failed to initialize fake LSP client: %v", err)
+	}
+
+	_, err = ApplyTextEdits(ctx, client, filePath, []TextEdit{{
+		StartLine: 7,
+		EndLine:   9,
+		NewText: strings.Join([]string{
+			"  for i := 1 to 1000 do",
+			"    Result := square(i);",
+		}, "\n"),
+	}})
+	if err != nil {
+		t.Fatalf("expected multiline edit 7..9 to succeed, got error: %v", err)
+	}
+
+	updatedContentBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read long loop fixture after edit: %v", err)
+	}
+
+	updatedContent := string(updatedContentBytes)
+	expectedFragment := strings.Join([]string{
+		"  for i := 1 to 1000 do",
+		"    Result := square(i);",
+		"  end;",
+	}, "\r\n")
+	if !strings.Contains(updatedContent, expectedFragment) {
+		t.Fatalf("expected edited long-loop block to keep for/result/end sequence; expected fragment %q in content %q", expectedFragment, updatedContent)
+	}
+
+	if strings.Count(updatedContent, "  Result := square(i);") != 1 {
+		t.Fatalf("expected no residual duplicated 'Result := square(i);' line outside edited loop; got content %q", updatedContent)
 	}
 }
 
