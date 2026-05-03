@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -431,6 +433,59 @@ func (s *mcpServer) registerTools() error {
 				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
 			}
 			result, err := tools.GetDependencyTree(s.ctx, s.lspClient, uri, direction)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// call_graph
+	s.mcpServer.AddTool(
+		mcp.NewTool("call_graph",
+			mcp.WithDescription("Returns the call graph for a symbol, including called routines and reverse callers, with optional traversal depth."),
+			mcp.WithString("symbolName",
+				mcp.Required(),
+				mcp.Description("Symbol to analyze in the call graph (e.g. Unit1.DoWork or TWorker.Execute)."),
+			),
+			mcp.WithNumber("depth",
+				mcp.Description("Optional positive integer depth for traversal. Defaults to 1 when omitted."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			symbolName, ok := req.Params.Arguments["symbolName"].(string)
+			if !ok {
+				return mcp.NewToolResultError("symbolName must be a string"), nil
+			}
+
+			symbolName = strings.TrimSpace(symbolName)
+			if symbolName == "" {
+				return mcp.NewToolResultError("symbolName must be a non-empty string"), nil
+			}
+
+			depth := 1
+			if depthRaw, exists := req.Params.Arguments["depth"]; exists && depthRaw != nil {
+				var depthNumber float64
+				switch v := depthRaw.(type) {
+				case float64:
+					depthNumber = v
+				case int:
+					depthNumber = float64(v)
+				default:
+					return mcp.NewToolResultError("depth must be a number"), nil
+				}
+
+				if depthNumber <= 0 {
+					return mcp.NewToolResultError("depth must be a positive integer"), nil
+				}
+				if depthNumber != math.Trunc(depthNumber) {
+					return mcp.NewToolResultError("depth must be an integer"), nil
+				}
+
+				depth = int(depthNumber)
+			}
+
+			result, err := tools.GetCallGraph(s.ctx, s.lspClient, symbolName, depth)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}
