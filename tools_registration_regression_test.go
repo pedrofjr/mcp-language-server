@@ -22,7 +22,7 @@ func TestRegisterTools_RegistersCallGraphAlongsideCoreDelphiTools(t *testing.T) 
 		toolSet[tool.Name] = struct{}{}
 	}
 
-	required := []string{"call_graph", "ast_summary", "dependency_tree", "workspace_symbols"}
+	required := []string{"call_graph", "ast_summary", "dependency_tree", "workspace_symbols", "semantic_search"}
 	for _, name := range required {
 		if _, ok := toolSet[name]; !ok {
 			t.Fatalf("expected registerTools() to include %q in tools/list, but it was missing", name)
@@ -113,6 +113,90 @@ func TestRegisterTools_WorkspaceSymbols_RemainsRegisteredAndCallable(t *testing.
 
 	if !strings.Contains(string(resultBytes), "query must be a string") {
 		t.Fatalf("expected workspace_symbols error message to mention invalid query type, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_SemanticSearch_RegisteredAndValidatesParams(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 30)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundSemanticSearch := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "semantic_search" {
+			foundSemanticSearch = true
+			break
+		}
+	}
+	if !foundSemanticSearch {
+		t.Fatal("expected semantic_search to be explicitly registered in tools/list")
+	}
+
+	cases := []struct {
+		name           string
+		args           map[string]any
+		expectedSubstr string
+	}{
+		{
+			name:           "query must be string",
+			args:           map[string]any{"query": 123},
+			expectedSubstr: "query must be a non-empty string",
+		},
+		{
+			name:           "query must be non-empty",
+			args:           map[string]any{"query": "   "},
+			expectedSubstr: "query must be a non-empty string",
+		},
+		{
+			name:           "scope enum validation",
+			args:           map[string]any{"query": "payment", "scope": "project"},
+			expectedSubstr: "scope must be 'workspace' or 'file'",
+		},
+		{
+			name:           "scope file requires uri",
+			args:           map[string]any{"query": "payment", "scope": "file"},
+			expectedSubstr: "uri is required when scope='file'",
+		},
+		{
+			name:           "limit must be positive integer",
+			args:           map[string]any{"query": "payment", "limit": 0},
+			expectedSubstr: "limit must be a positive integer",
+		},
+	}
+
+	for i, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name":      "semantic_search",
+				"arguments": tc.args,
+			},
+			31+i,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal semantic_search result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode semantic_search result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected semantic_search to return tool error for invalid params", tc.name)
+		}
+
+		if !strings.Contains(string(resultBytes), tc.expectedSubstr) {
+			t.Fatalf("%s: expected semantic_search error to contain %q, got %s", tc.name, tc.expectedSubstr, string(resultBytes))
+		}
 	}
 }
 

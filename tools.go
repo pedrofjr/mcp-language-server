@@ -493,6 +493,86 @@ func (s *mcpServer) registerTools() error {
 		},
 	)
 
+	// semantic_search
+	s.mcpServer.AddTool(
+		mcp.NewTool("semantic_search",
+			mcp.WithDescription("Search semantically relevant symbols and snippets using the language server semantic index."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("Search query string. Must be non-empty after trim."),
+			),
+			mcp.WithString("scope",
+				mcp.Description("Optional scope: 'workspace' (default) or 'file'."),
+			),
+			mcp.WithString("uri",
+				mcp.Description("Required when scope='file'. File URI to restrict the semantic search."),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Optional positive integer result limit. Defaults to 20."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query, ok := req.Params.Arguments["query"].(string)
+			if !ok || strings.TrimSpace(query) == "" {
+				return mcp.NewToolResultError("query must be a non-empty string"), nil
+			}
+
+			scope := "workspace"
+			if scopeRaw, exists := req.Params.Arguments["scope"]; exists && scopeRaw != nil {
+				scopeText, ok := scopeRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("scope must be 'workspace' or 'file'"), nil
+				}
+				scopeText = strings.TrimSpace(scopeText)
+				if scopeText != "" {
+					scope = scopeText
+				}
+			}
+
+			if scope != "workspace" && scope != "file" {
+				return mcp.NewToolResultError("scope must be 'workspace' or 'file'"), nil
+			}
+
+			uri := ""
+			if uriRaw, exists := req.Params.Arguments["uri"]; exists && uriRaw != nil {
+				uriText, ok := uriRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("uri must be a string"), nil
+				}
+				uri = strings.TrimSpace(uriText)
+			}
+
+			if scope == "file" && uri == "" {
+				return mcp.NewToolResultError("uri is required when scope='file'"), nil
+			}
+
+			limit := 20
+			if limitRaw, exists := req.Params.Arguments["limit"]; exists && limitRaw != nil {
+				var limitNumber float64
+				switch v := limitRaw.(type) {
+				case float64:
+					limitNumber = v
+				case int:
+					limitNumber = float64(v)
+				default:
+					return mcp.NewToolResultError("limit must be a positive integer"), nil
+				}
+
+				if limitNumber <= 0 || limitNumber != math.Trunc(limitNumber) {
+					return mcp.NewToolResultError("limit must be a positive integer"), nil
+				}
+
+				limit = int(limitNumber)
+			}
+
+			result, err := tools.GetSemanticSearch(s.ctx, s.lspClient, query, scope, uri, limit)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
 	coreLogger.Info("Successfully registered all MCP tools")
 	return nil
 }
