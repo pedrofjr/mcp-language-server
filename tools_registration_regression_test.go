@@ -428,6 +428,90 @@ func TestRegisterTools_GraphNode_RegisteredAndValidatesParams(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_GraphQuery_RegisteredAndValidatesParams(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 70)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundGraphQuery := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "graph_query" {
+			foundGraphQuery = true
+			break
+		}
+	}
+	if !foundGraphQuery {
+		t.Fatal("expected graph_query to be explicitly registered in tools/list")
+	}
+
+	cases := []struct {
+		name           string
+		args           map[string]any
+		expectedSubstr string
+	}{
+		{
+			name:           "uri must be string",
+			args:           map[string]any{"uri": 123, "relationType": "uses_unit", "direction": "both", "depth": 1},
+			expectedSubstr: "uri must be a non-empty string",
+		},
+		{
+			name:           "relationType enum validation",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": "calls", "direction": "both", "depth": 1},
+			expectedSubstr: "relationType must be 'uses_unit'",
+		},
+		{
+			name:           "direction enum validation",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": "uses_unit", "direction": "sideways", "depth": 1},
+			expectedSubstr: "direction must be 'imports', 'importedBy' or 'both'",
+		},
+		{
+			name:           "depth must be integer",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": "uses_unit", "direction": "both", "depth": 1.5},
+			expectedSubstr: "depth must be an integer",
+		},
+		{
+			name:           "depth cannot be negative",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": "uses_unit", "direction": "both", "depth": -1},
+			expectedSubstr: "depth must be greater than or equal to 0",
+		},
+	}
+
+	for i, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name":      "graph_query",
+				"arguments": tc.args,
+			},
+			71+i,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal graph_query result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode graph_query result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected graph_query to return tool error for invalid params", tc.name)
+		}
+
+		if !strings.Contains(string(resultBytes), tc.expectedSubstr) {
+			t.Fatalf("%s: expected graph_query error to contain %q, got %s", tc.name, tc.expectedSubstr, string(resultBytes))
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 

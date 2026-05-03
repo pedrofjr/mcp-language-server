@@ -538,6 +538,84 @@ func (s *mcpServer) registerTools() error {
 		},
 	)
 
+	// graph_query
+	s.mcpServer.AddTool(
+		mcp.NewTool("graph_query",
+			mcp.WithDescription("Returns a bounded graph neighborhood for a Delphi unit using relationType='uses_unit', direction='imports'|'importedBy'|'both' and traversal depth."),
+			mcp.WithString("uri",
+				mcp.Required(),
+				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
+			),
+			mcp.WithString("relationType",
+				mcp.Description("Relation kind. Only 'uses_unit' is currently supported."),
+			),
+			mcp.WithString("direction",
+				mcp.Description("Traversal direction: 'imports', 'importedBy' or 'both' (default)."),
+			),
+			mcp.WithNumber("depth",
+				mcp.Description("Traversal depth as an integer >= 0. Defaults to 1."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			uri, ok := req.Params.Arguments["uri"].(string)
+			if !ok || strings.TrimSpace(uri) == "" {
+				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+			}
+
+			relationType := ""
+			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
+				relationTypeValue, ok := relationTypeRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				}
+				relationType = strings.TrimSpace(relationTypeValue)
+			}
+			if relationType != "" && relationType != "uses_unit" {
+				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+			}
+
+			direction := ""
+			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
+				directionValue, ok := directionRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("direction must be 'imports', 'importedBy' or 'both'"), nil
+				}
+				direction = strings.TrimSpace(directionValue)
+			}
+			if direction != "" && direction != "imports" && direction != "importedBy" && direction != "both" {
+				return mcp.NewToolResultError("direction must be 'imports', 'importedBy' or 'both'"), nil
+			}
+
+			depth := 1
+			if depthRaw, exists := req.Params.Arguments["depth"]; exists && depthRaw != nil {
+				var depthNumber float64
+				switch v := depthRaw.(type) {
+				case float64:
+					depthNumber = v
+				case int:
+					depthNumber = float64(v)
+				default:
+					return mcp.NewToolResultError("depth must be an integer"), nil
+				}
+
+				if depthNumber != math.Trunc(depthNumber) {
+					return mcp.NewToolResultError("depth must be an integer"), nil
+				}
+				if depthNumber < 0 {
+					return mcp.NewToolResultError("depth must be greater than or equal to 0"), nil
+				}
+
+				depth = int(depthNumber)
+			}
+
+			result, err := tools.GetGraphQuery(s.ctx, s.lspClient, uri, relationType, direction, depth)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
 	// call_graph
 	s.mcpServer.AddTool(
 		mcp.NewTool("call_graph",
