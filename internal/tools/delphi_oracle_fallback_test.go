@@ -1666,6 +1666,103 @@ func TestDelphiOracle_Diagnostics_UsaCachePublishDiagnosticsQuandoDocumentDiagno
 	}
 }
 
+func TestDelphiOracle_FindReferences_ThreePartQualifiedMethod_RetryPathFindsWithTwoPartPattern(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolMatchedButUnsustainedEnv, "1")
+
+	fixtures := map[string]string{
+		"uMain.pas": strings.Join([]string{
+			"procedure TFormMain.FormCreate(Sender: TObject);",
+			"begin",
+			"  Button1.Caption := 'Loaded';",
+			"end;",
+			"",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	filePath := filePaths["uMain.pas"]
+	if err := client.OpenFile(ctx, filePath); err != nil {
+		t.Fatalf("falha ao abrir uMain.pas para references 3-partes via retry: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "uMain.TFormMain.FormCreate")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar para simbolo 3-partes uMain.TFormMain.FormCreate: %v", err)
+	}
+
+	if strings.Contains(result, "No references found") {
+		t.Fatalf("esperado references nao vazio para uMain.TFormMain.FormCreate via retry com padrao 2-partes; resultado: %s", result)
+	}
+
+	if !strings.Contains(result, "References in File") {
+		t.Fatalf("esperado bloco de arquivo no resultado de references para uMain.TFormMain.FormCreate; obtido: %s", result)
+	}
+
+	if !strings.Contains(result, filePath) {
+		t.Fatalf("esperado references apontar para uMain.pas %s; obtido: %s", filePath, result)
+	}
+}
+
+func TestDelphiOracle_FindReferences_ThreePartQualifiedMethod_WorkspaceScanFindsCallSitesWithTwoPartPattern(t *testing.T) {
+	t.Setenv(fakeLSPWorkspaceSymbolProviderEnv, "1")
+	t.Setenv(fakeLSPWorkspaceSymbolIrrelevantEnv, "1")
+
+	fixtures := map[string]string{
+		"uMain.pas": strings.Join([]string{
+			"procedure TFormMain.FormCreate(Sender: TObject);",
+			"begin",
+			"  Button1.Caption := 'Ready';",
+			"end;",
+			"",
+		}, "\n"),
+		"caller.pas": strings.Join([]string{
+			"unit Caller;",
+			"",
+			"implementation",
+			"",
+			"procedure Run;",
+			"begin",
+			"  TFormMain.FormCreate(nil);",
+			"end;",
+			"",
+			"end.",
+		}, "\n"),
+	}
+
+	client, filePaths, cleanup := setupDelphiOracleFakeClientWithFixtures(t, fixtures)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	uMainPath := filePaths["uMain.pas"]
+	callerPath := filePaths["caller.pas"]
+	if err := client.OpenFile(ctx, uMainPath); err != nil {
+		t.Fatalf("falha ao abrir uMain.pas para references 3-partes com workspace scan: %v", err)
+	}
+
+	result, err := FindReferences(ctx, client, "uMain.TFormMain.FormCreate")
+	if err != nil {
+		t.Fatalf("FindReferences nao deveria falhar para simbolo 3-partes uMain.TFormMain.FormCreate via workspace scan: %v", err)
+	}
+
+	if strings.Contains(result, "No references found") {
+		t.Fatalf("esperado references nao vazio para uMain.TFormMain.FormCreate via workspace scan com padrao 2-partes; resultado: %s", result)
+	}
+
+	if !strings.Contains(result, callerPath) {
+		t.Fatalf("esperado workspace scan incluir caller.pas %s com chamada TFormMain.FormCreate; obtido: %s", callerPath, result)
+	}
+
+	_ = uMainPath // uMain.pas pode ou nao aparecer dependendo do postprocess
+}
+
 func setupDelphiOracleFakeClient(t *testing.T) (*lsp.Client, string, func()) {
 	t.Helper()
 

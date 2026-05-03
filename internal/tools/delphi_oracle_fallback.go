@@ -507,12 +507,25 @@ func definitionResultToLocations(result protocol.Or_Result_textDocument_definiti
 
 func buildSymbolSearchPatterns(symbolName string) []*regexp.Regexp {
 	if owner, member, ok := splitQualifiedSymbolQuery(symbolName); ok {
-		pattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(owner) + `(?:\.|::)` + regexp.QuoteMeta(member) + `\b`)
+		fullPattern, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(owner) + `(?:\.|::)` + regexp.QuoteMeta(member) + `\b`)
 		if err != nil {
 			return nil
 		}
 
-		return []*regexp.Regexp{pattern}
+		patterns := []*regexp.Regexp{fullPattern}
+
+		// Para símbolos com 3+ partes (ex: uMain.TFormMain.FormCreate),
+		// adicionar padrão 2-partes (TFormMain.FormCreate) pois call-sites
+		// no código Delphi geralmente não incluem o prefixo de unit.
+		// Afeta tanto collectOpenFileReferenceRetryLocations quanto
+		// collectLastResortWorkspaceReferenceLocations.
+		if _, ownerMember, hasMultiLevelOwner := splitQualifiedSymbolQuery(owner); hasMultiLevelOwner {
+			if shortPattern, err2 := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(ownerMember) + `(?:\.|::)` + regexp.QuoteMeta(member) + `\b`); err2 == nil {
+				patterns = append(patterns, shortPattern)
+			}
+		}
+
+		return patterns
 	}
 
 	terms := []string{symbolName}
