@@ -500,6 +500,44 @@ func (s *mcpServer) registerTools() error {
 		},
 	)
 
+	// graph_node
+	s.mcpServer.AddTool(
+		mcp.NewTool("graph_node",
+			mcp.WithDescription("Returns graph node relations for a Delphi unit node using relationType='uses_unit'."),
+			mcp.WithString("uri",
+				mcp.Required(),
+				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
+			),
+			mcp.WithString("relationType",
+				mcp.Description("Relation kind. Only 'uses_unit' is currently supported."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			uri, ok := req.Params.Arguments["uri"].(string)
+			if !ok || strings.TrimSpace(uri) == "" {
+				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+			}
+
+			relationType := ""
+			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
+				relationTypeValue, ok := relationTypeRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				}
+				relationType = strings.TrimSpace(relationTypeValue)
+			}
+			if relationType != "" && relationType != "uses_unit" {
+				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+			}
+
+			result, err := tools.GetGraphNode(s.ctx, s.lspClient, uri, relationType)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
 	// call_graph
 	s.mcpServer.AddTool(
 		mcp.NewTool("call_graph",

@@ -349,6 +349,85 @@ func TestRegisterTools_GraphNeighbors_RegisteredAndValidatesParams(t *testing.T)
 	}
 }
 
+func TestRegisterTools_GraphNode_RegisteredAndValidatesParams(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 60)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundGraphNode := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "graph_node" {
+			foundGraphNode = true
+			break
+		}
+	}
+	if !foundGraphNode {
+		t.Fatal("expected graph_node to be explicitly registered in tools/list")
+	}
+
+	cases := []struct {
+		name           string
+		args           map[string]any
+		expectedSubstr string
+	}{
+		{
+			name:           "uri must be string",
+			args:           map[string]any{"uri": 123, "relationType": "uses_unit"},
+			expectedSubstr: "uri must be a non-empty string",
+		},
+		{
+			name:           "uri must be non-empty",
+			args:           map[string]any{"uri": "   ", "relationType": "uses_unit"},
+			expectedSubstr: "uri must be a non-empty string",
+		},
+		{
+			name:           "relationType enum validation",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": "calls"},
+			expectedSubstr: "relationType must be 'uses_unit'",
+		},
+		{
+			name:           "relationType must be string when provided",
+			args:           map[string]any{"uri": "file:///tmp/Unit1.pas", "relationType": 42},
+			expectedSubstr: "relationType must be 'uses_unit'",
+		},
+	}
+
+	for i, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name":      "graph_node",
+				"arguments": tc.args,
+			},
+			61+i,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal graph_node result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode graph_node result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected graph_node to return tool error for invalid params", tc.name)
+		}
+
+		if !strings.Contains(string(resultBytes), tc.expectedSubstr) {
+			t.Fatalf("%s: expected graph_node error to contain %q, got %s", tc.name, tc.expectedSubstr, string(resultBytes))
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 
