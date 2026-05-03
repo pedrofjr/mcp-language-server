@@ -88,17 +88,40 @@ func TestGetCallGraph_WhenLSPReturnsObject_FormatsIndentedJSON(t *testing.T) {
 	}
 
 	calls, ok := payload["calls"].([]any)
-	if !ok || len(calls) != 1 {
-		t.Fatalf("expected exactly one call entry, got %#v", payload["calls"])
+	if !ok || len(calls) != 2 {
+		t.Fatalf("expected exactly two call entries, got %#v", payload["calls"])
 	}
 
-	firstCall, ok := calls[0].(map[string]any)
+	edgesBySymbol := map[string]map[string]any{}
+	for _, entry := range calls {
+		edge, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("expected call entry to be object, got %#v", entry)
+		}
+		symbol, _ := edge["symbol"].(string)
+		edgesBySymbol[symbol] = edge
+	}
+
+	trimEdge, ok := edgesBySymbol["Trim"]
 	if !ok {
-		t.Fatalf("expected first call to be object, got %#v", calls[0])
+		t.Fatalf("expected calls to contain Trim edge, got %#v", calls)
+	}
+	if trimEdge["unit"] != "SysUtils" {
+		t.Fatalf("expected Trim edge unit SysUtils, got %#v", trimEdge["unit"])
+	}
+	if trimEdge["isStub"] != true {
+		t.Fatalf("expected Trim edge isStub=true, got %#v", trimEdge["isStub"])
 	}
 
-	if firstCall["name"] != "HelperProc" {
-		t.Fatalf("expected first call name HelperProc, got %#v", firstCall["name"])
+	helperEdge, ok := edgesBySymbol["HelperProc"]
+	if !ok {
+		t.Fatalf("expected calls to contain HelperProc edge, got %#v", calls)
+	}
+	if helperEdge["unit"] != "UnitX" {
+		t.Fatalf("expected HelperProc edge unit UnitX, got %#v", helperEdge["unit"])
+	}
+	if helperEdge["isStub"] != false {
+		t.Fatalf("expected HelperProc edge isStub=false, got %#v", helperEdge["isStub"])
 	}
 }
 
@@ -185,7 +208,10 @@ func runCallGraphFakeLSP(stdin *os.File, stdout *os.File) {
 			}
 			result := map[string]any{
 				"symbol": "DoWork",
-				"calls":  []map[string]any{{"name": "HelperProc"}},
+				"calls": []map[string]any{
+					{"symbol": "Trim", "unit": "SysUtils", "isStub": true},
+					{"symbol": "HelperProc", "unit": "UnitX", "isStub": false},
+				},
 			}
 			sendCallGraphFakeResponse(writer, msg.ID, result, nil)
 		case "custom/testing/methodCallCount":
