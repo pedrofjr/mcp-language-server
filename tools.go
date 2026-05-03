@@ -447,6 +447,59 @@ func (s *mcpServer) registerTools() error {
 		},
 	)
 
+	// graph_neighbors
+	s.mcpServer.AddTool(
+		mcp.NewTool("graph_neighbors",
+			mcp.WithDescription("Returns immediate graph neighbors for a Delphi unit node using relationType='uses_unit' and direction='imports'|'importedBy'."),
+			mcp.WithString("uri",
+				mcp.Required(),
+				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
+			),
+			mcp.WithString("relationType",
+				mcp.Description("Relation kind. Only 'uses_unit' is currently supported."),
+			),
+			mcp.WithString("direction",
+				mcp.Description("Neighborhood direction: 'imports' (default) or 'importedBy'."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			uri, ok := req.Params.Arguments["uri"].(string)
+			if !ok || strings.TrimSpace(uri) == "" {
+				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+			}
+
+			relationType := ""
+			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
+				relationTypeValue, ok := relationTypeRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				}
+				relationType = strings.TrimSpace(relationTypeValue)
+			}
+			if relationType != "" && relationType != "uses_unit" {
+				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+			}
+
+			direction := ""
+			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
+				directionValue, ok := directionRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+				}
+				direction = strings.TrimSpace(directionValue)
+			}
+			if direction != "" && direction != "imports" && direction != "importedBy" {
+				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+			}
+
+			result, err := tools.GetGraphNeighbors(s.ctx, s.lspClient, uri, relationType, direction)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
 	// call_graph
 	s.mcpServer.AddTool(
 		mcp.NewTool("call_graph",
