@@ -414,7 +414,7 @@ func (s *mcpServer) registerTools() error {
 	// dependency_tree
 	s.mcpServer.AddTool(
 		mcp.NewTool("dependency_tree",
-			mcp.WithDescription("Returns the dependency graph for a Delphi unit. Use direction='imports' to see what the unit depends on, or direction='importedBy' to see what depends on it."),
+			mcp.WithDescription("Returns the dependency graph for a Delphi unit. Use direction='imports' to see what the unit depends on, or direction='importedBy' to see what depends on it. The response includes a 'tree' flat map and a 'treeBySection' map that splits each unit's dependencies into 'interface' and 'implementation' sections (only populated for direction='imports')."),
 			mcp.WithString("uri",
 				mcp.Required(),
 				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
@@ -443,7 +443,7 @@ func (s *mcpServer) registerTools() error {
 	// call_graph
 	s.mcpServer.AddTool(
 		mcp.NewTool("call_graph",
-			mcp.WithDescription("Returns the call graph for a symbol, including called routines and reverse callers, with optional traversal depth."),
+			mcp.WithDescription("Returns the call graph for a symbol, including called routines and reverse callers, with optional traversal depth. Each edge in 'calls' and 'calledBy' arrays includes an 'isStub' boolean field that is true when the referenced unit is a built-in RTL/VCL stub (e.g. SysUtils, Classes, Graphics)."),
 			mcp.WithString("symbolName",
 				mcp.Required(),
 				mcp.Description("Symbol to analyze in the call graph (e.g. Unit1.DoWork or TWorker.Execute)."),
