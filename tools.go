@@ -428,7 +428,14 @@ func (s *mcpServer) registerTools() error {
 			if !ok || uri == "" {
 				return mcp.NewToolResultError("uri must be a non-empty string"), nil
 			}
-			direction, _ := req.Params.Arguments["direction"].(string)
+			direction := ""
+			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
+				directionValue, ok := directionRaw.(string)
+				if !ok {
+					return mcp.NewToolResultError("direction must be a string: 'imports' or 'importedBy'"), nil
+				}
+				direction = directionValue
+			}
 			if direction != "" && direction != "imports" && direction != "importedBy" {
 				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
 			}

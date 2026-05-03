@@ -200,6 +200,81 @@ func TestRegisterTools_SemanticSearch_RegisteredAndValidatesParams(t *testing.T)
 	}
 }
 
+func TestRegisterTools_DependencyTree_RegisteredAndRejectsInvalidDirection(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 40)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundDependencyTree := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "dependency_tree" {
+			foundDependencyTree = true
+			break
+		}
+	}
+	if !foundDependencyTree {
+		t.Fatal("expected dependency_tree to be explicitly registered in tools/list")
+	}
+
+	cases := []struct {
+		name      string
+		direction any
+	}{
+		{name: "invalid enum value", direction: "sideways"},
+		{name: "non-string direction", direction: 123},
+	}
+
+	for i, tc := range cases {
+		request := mcp.JSONRPCRequest{
+			JSONRPC: mcp.JSONRPC_VERSION,
+			ID:      41 + i,
+			Request: mcp.Request{Method: string(mcp.MethodToolsCall)},
+			Params: map[string]any{
+				"name": "dependency_tree",
+				"arguments": map[string]any{
+					"uri":       "file:///tmp/Unit1.pas",
+					"direction": tc.direction,
+				},
+			},
+		}
+
+		requestBytes, err := json.Marshal(request)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal request: %v", tc.name, err)
+		}
+
+		rawResponse := svc.mcpServer.HandleMessage(context.Background(), requestBytes)
+
+		var payload string
+		switch response := rawResponse.(type) {
+		case mcp.JSONRPCResponse:
+			resultBytes, err := json.Marshal(response.Result)
+			if err != nil {
+				t.Fatalf("%s: failed to marshal dependency_tree result: %v", tc.name, err)
+			}
+			payload = string(resultBytes)
+		case mcp.JSONRPCError:
+			errorBytes, err := json.Marshal(response)
+			if err != nil {
+				t.Fatalf("%s: failed to marshal dependency_tree JSONRPCError: %v", tc.name, err)
+			}
+			payload = string(errorBytes)
+		default:
+			t.Fatalf("%s: HandleMessage() returned %T, want JSONRPCResponse or JSONRPCError", tc.name, rawResponse)
+		}
+
+		if !strings.Contains(payload, "direction") {
+			t.Fatalf("%s: expected dependency_tree failure payload to mention direction, got %s", tc.name, payload)
+		}
+		if !strings.Contains(payload, "imports") || !strings.Contains(payload, "importedBy") {
+			t.Fatalf("%s: expected dependency_tree failure payload to mention allowed direction values, got %s", tc.name, payload)
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 
