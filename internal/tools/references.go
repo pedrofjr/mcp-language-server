@@ -322,8 +322,7 @@ func collectLastResortWorkspaceReferenceLocations(client *lsp.Client, symbolName
 	if len(workspaceRoots) == 0 {
 		return nil
 	}
-
-	locations := make([]protocol.Location, 0, len(symbolLocations))
+	var seedLocations []protocol.Location
 	seenLocations := make(map[string]struct{}, len(symbolLocations))
 	for _, loc := range symbolLocations {
 		if !isDelphiWorkspaceReferenceFile(loc.URI.Path()) {
@@ -336,9 +335,9 @@ func collectLastResortWorkspaceReferenceLocations(client *lsp.Client, symbolName
 		}
 
 		seenLocations[locationKey] = struct{}{}
-		locations = append(locations, loc)
+		seedLocations = append(seedLocations, loc)
 	}
-
+	var locations []protocol.Location
 	for _, root := range workspaceRoots {
 		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -376,6 +375,11 @@ func collectLastResortWorkspaceReferenceLocations(client *lsp.Client, symbolName
 
 			return nil
 		})
+	}
+
+	// Inclui declações apenas se o walk encontrou referências reais
+	if len(locations) > 0 {
+		locations = append(seedLocations, locations...)
 	}
 
 	return locations
