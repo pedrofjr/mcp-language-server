@@ -749,6 +749,89 @@ func (s *mcpServer) registerTools() error {
 		},
 	)
 
+	// code_actions
+	s.mcpServer.AddTool(
+		mcp.NewTool("code_actions",
+			mcp.WithDescription("Get the available code actions (quick fixes, refactors, etc.) for a given position in a file."),
+			mcp.WithString("filePath",
+				mcp.Required(),
+				mcp.Description("The path to the file to get code actions for"),
+			),
+			mcp.WithNumber("line",
+				mcp.Required(),
+				mcp.Description("The line number where the code actions are requested (1-indexed)"),
+			),
+			mcp.WithNumber("column",
+				mcp.Required(),
+				mcp.Description("The column number where the code actions are requested (1-indexed)"),
+			),
+			mcp.WithArray("only",
+				mcp.Description("Optional filter for action kinds (e.g. [\"quickfix\"])"),
+				mcp.Items(map[string]any{"type": "string"}),
+			),
+			mcp.WithBoolean("includeDiagnostics",
+				mcp.Description("When true, attaches current file diagnostics to the code-action context"),
+				mcp.DefaultBool(false),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath, ok := req.Params.Arguments["filePath"].(string)
+			if !ok {
+				return mcp.NewToolResultError("filePath must be a string"), nil
+			}
+
+			var line int
+			switch v := req.Params.Arguments["line"].(type) {
+			case float64:
+				line = int(v)
+			case int:
+				line = v
+			default:
+				return mcp.NewToolResultError("line must be a number"), nil
+			}
+
+			var column int
+			switch v := req.Params.Arguments["column"].(type) {
+			case float64:
+				column = int(v)
+			case int:
+				column = v
+			default:
+				return mcp.NewToolResultError("column must be a number"), nil
+			}
+
+			var only []string
+			if onlyRaw, exists := req.Params.Arguments["only"]; exists && onlyRaw != nil {
+				onlyArr, ok := onlyRaw.([]any)
+				if !ok {
+					return mcp.NewToolResultError("only must be an array of strings"), nil
+				}
+				for _, item := range onlyArr {
+					s, ok := item.(string)
+					if !ok {
+						return mcp.NewToolResultError("only must be an array of strings"), nil
+					}
+					only = append(only, s)
+				}
+			}
+
+			includeDiagnostics := false
+			if inclRaw, exists := req.Params.Arguments["includeDiagnostics"]; exists && inclRaw != nil {
+				inclBool, ok := inclRaw.(bool)
+				if !ok {
+					return mcp.NewToolResultError("includeDiagnostics must be a boolean"), nil
+				}
+				includeDiagnostics = inclBool
+			}
+
+			text, err := tools.GetCodeActions(s.ctx, s.lspClient, filePath, line, column, only, includeDiagnostics)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get code actions: %v", err)), nil
+			}
+			return mcp.NewToolResultText(text), nil
+		},
+	)
+
 	coreLogger.Info("Successfully registered all MCP tools")
 	return nil
 }

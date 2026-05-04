@@ -512,6 +512,90 @@ func TestRegisterTools_GraphQuery_RegisteredAndValidatesParams(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_CodeActions_RegisteredAndValidatesParams(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 80)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundCodeActions := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "code_actions" {
+			foundCodeActions = true
+			break
+		}
+	}
+	if !foundCodeActions {
+		t.Fatal("expected code_actions to be explicitly registered in tools/list")
+	}
+
+	cases := []struct {
+		name           string
+		args           map[string]any
+		expectedSubstr string
+	}{
+		{
+			name:           "filePath must be string",
+			args:           map[string]any{"filePath": 123, "line": 7, "column": 13},
+			expectedSubstr: "filePath must be a string",
+		},
+		{
+			name:           "line must be number",
+			args:           map[string]any{"filePath": "C:/tmp/sample.pas", "line": "7", "column": 13},
+			expectedSubstr: "line must be a number",
+		},
+		{
+			name:           "column must be number",
+			args:           map[string]any{"filePath": "C:/tmp/sample.pas", "line": 7, "column": "13"},
+			expectedSubstr: "column must be a number",
+		},
+		{
+			name:           "only must be array of strings",
+			args:           map[string]any{"filePath": "C:/tmp/sample.pas", "line": 7, "column": 13, "only": "quickfix"},
+			expectedSubstr: "only must be an array of strings",
+		},
+		{
+			name:           "includeDiagnostics must be bool",
+			args:           map[string]any{"filePath": "C:/tmp/sample.pas", "line": 7, "column": 13, "includeDiagnostics": "true"},
+			expectedSubstr: "includeDiagnostics must be a boolean",
+		},
+	}
+
+	for i, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name":      "code_actions",
+				"arguments": tc.args,
+			},
+			81+i,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal code_actions result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode code_actions result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected code_actions to return tool error for invalid params", tc.name)
+		}
+
+		if !strings.Contains(string(resultBytes), tc.expectedSubstr) {
+			t.Fatalf("%s: expected code_actions error to contain %q, got %s", tc.name, tc.expectedSubstr, string(resultBytes))
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 
