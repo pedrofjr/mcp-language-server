@@ -154,3 +154,29 @@ func getSeverityString(severity protocol.DiagnosticSeverity) string {
 		return "UNKNOWN"
 	}
 }
+
+// GetDiagnosticsForSymbol retorna diagnosticos relevantes para um simbolo pelo nome.
+func GetDiagnosticsForSymbol(ctx context.Context, client *lsp.Client, filePath, symbolName string) (string, error) {
+	allDiags, err := GetDiagnosticsForFile(ctx, client, filePath, 2, true)
+	if err != nil {
+		return "", err
+	}
+
+	if symbolName == "" {
+		return allDiags, nil
+	}
+
+	var relevant []string
+	lowerSymbol := strings.ToLower(symbolName)
+	for _, line := range strings.Split(allDiags, "\n") {
+		if strings.Contains(strings.ToLower(line), lowerSymbol) {
+			relevant = append(relevant, line)
+		}
+	}
+
+	if len(relevant) == 0 {
+		return fmt.Sprintf("Nenhum diagnostico encontrado para o simbolo %q em %s", symbolName, filePath), nil
+	}
+
+	return strings.Join(relevant, "\n"), nil
+}

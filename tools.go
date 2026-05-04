@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -831,6 +833,449 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultText(text), nil
 		},
 	)
+
+	// replace_symbol_body
+	s.mcpServer.AddTool(
+		mcp.NewTool("replace_symbol_body",
+			mcp.WithDescription("Replace the begin..end body of a named Delphi symbol with new code."),
+			mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute path to the .pas file")),
+			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar' or 'Bar'")),
+			mcp.WithString("newBody", mcp.Required(), mcp.Description("Replacement text for the begin..end block (include begin and end lines)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath, ok := req.Params.Arguments["filePath"].(string)
+			if !ok {
+				return mcp.NewToolResultError("filePath must be a string"), nil
+			}
+			symbolName, ok := req.Params.Arguments["symbolName"].(string)
+			if !ok {
+				return mcp.NewToolResultError("symbolName must be a string"), nil
+			}
+			newBody, ok := req.Params.Arguments["newBody"].(string)
+			if !ok {
+				return mcp.NewToolResultError("newBody must be a string"), nil
+			}
+			result, err := tools.ReplaceSymbolBody(s.ctx, s.lspClient, filePath, symbolName, newBody)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("replace_symbol_body failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// insert_after_symbol
+	s.mcpServer.AddTool(
+		mcp.NewTool("insert_after_symbol",
+			mcp.WithDescription("Insert code immediately after the end of a named Delphi symbol."),
+			mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute path to the .pas file")),
+			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar'")),
+			mcp.WithString("text", mcp.Required(), mcp.Description("Text to insert after the symbol")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath, ok := req.Params.Arguments["filePath"].(string)
+			if !ok {
+				return mcp.NewToolResultError("filePath must be a string"), nil
+			}
+			symbolName, ok := req.Params.Arguments["symbolName"].(string)
+			if !ok {
+				return mcp.NewToolResultError("symbolName must be a string"), nil
+			}
+			text, ok := req.Params.Arguments["text"].(string)
+			if !ok {
+				return mcp.NewToolResultError("text must be a string"), nil
+			}
+			result, err := tools.InsertAfterSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("insert_after_symbol failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// insert_before_symbol
+	s.mcpServer.AddTool(
+		mcp.NewTool("insert_before_symbol",
+			mcp.WithDescription("Insert code immediately before a named Delphi symbol."),
+			mcp.WithString("filePath", mcp.Required(), mcp.Description("Absolute path to the .pas file")),
+			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar'")),
+			mcp.WithString("text", mcp.Required(), mcp.Description("Text to insert before the symbol")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath, ok := req.Params.Arguments["filePath"].(string)
+			if !ok {
+				return mcp.NewToolResultError("filePath must be a string"), nil
+			}
+			symbolName, ok := req.Params.Arguments["symbolName"].(string)
+			if !ok {
+				return mcp.NewToolResultError("symbolName must be a string"), nil
+			}
+			text, ok := req.Params.Arguments["text"].(string)
+			if !ok {
+				return mcp.NewToolResultError("text must be a string"), nil
+			}
+			result, err := tools.InsertBeforeSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("insert_before_symbol failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// === Sprint 2 - Memoria ===
+	s.mcpServer.AddTool(mcp.NewTool("memory_write",
+		mcp.WithDescription("Cria uma entrada de memoria persistente para o agente"),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Titulo da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Conteudo a memorizar")),
+		mcp.WithString("tags", mcp.Description("Tags separadas por virgula")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		title, _ := request.Params.Arguments["title"].(string)
+		content, _ := request.Params.Arguments["content"].(string)
+		tagsStr, _ := request.Params.Arguments["tags"].(string)
+		var tags []string
+		if tagsStr != "" {
+			for _, tag := range strings.Split(tagsStr, ",") {
+				trimmed := strings.TrimSpace(tag)
+				if trimmed != "" {
+					tags = append(tags, trimmed)
+				}
+			}
+		}
+
+		id, err := tools.MemoryWrite(title, content, tags)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText("Entrada criada com ID: " + id), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_read",
+		mcp.WithDescription("Le uma entrada de memoria pelo ID"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := request.Params.Arguments["id"].(string)
+		entry, err := tools.MemoryRead(id)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("# %s\n\n%s\nTags: %s", entry.Title, entry.Content, strings.Join(entry.Tags, ", "))), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_list",
+		mcp.WithDescription("Lista entradas de memoria, opcionalmente filtradas por tag"),
+		mcp.WithString("tag", mcp.Description("Filtrar por tag (opcional)")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tag, _ := request.Params.Arguments["tag"].(string)
+		entries, err := tools.MemoryList(tag)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if len(entries) == 0 {
+			return mcp.NewToolResultText("Nenhuma entrada de memoria encontrada"), nil
+		}
+
+		var builder strings.Builder
+		for _, entry := range entries {
+			shortID := entry.ID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			builder.WriteString(fmt.Sprintf("- [%s] %s (tags: %s)\n", shortID, entry.Title, strings.Join(entry.Tags, ", ")))
+		}
+
+		return mcp.NewToolResultText(builder.String()), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_edit",
+		mcp.WithDescription("Edita o conteudo de uma entrada de memoria"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Novo conteudo")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := request.Params.Arguments["id"].(string)
+		content, _ := request.Params.Arguments["content"].(string)
+		if err := tools.MemoryEdit(id, content); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText("Entrada atualizada com sucesso"), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_delete",
+		mcp.WithDescription("Remove uma entrada de memoria pelo ID"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := request.Params.Arguments["id"].(string)
+		if err := tools.MemoryDelete(id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText("Entrada removida com sucesso"), nil
+	})
+
+	// === Sprint 2 - Edicao e Analise ===
+	s.mcpServer.AddTool(mcp.NewTool("safe_delete_symbol",
+		mcp.WithDescription("Remove um simbolo Delphi com verificacao de referencias"),
+		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo .pas")),
+		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome do simbolo a remover")),
+		mcp.WithString("force", mcp.Description("true para remover mesmo com referencias")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filePath, _ := request.Params.Arguments["filePath"].(string)
+		symbolName, _ := request.Params.Arguments["symbolName"].(string)
+		forceStr, _ := request.Params.Arguments["force"].(string)
+		force := strings.EqualFold(forceStr, "true")
+
+		result, err := tools.SafeDeleteSymbol(s.ctx, s.lspClient, filePath, symbolName, force)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	// Sprint 3: analyze_complexity
+	s.mcpServer.AddTool(
+		mcp.NewTool("analyze_complexity",
+			mcp.WithDescription("Analyze cyclomatic complexity of a Delphi symbol"),
+			mcp.WithString("src",
+				mcp.Required(),
+				mcp.Description("Source code content"),
+			),
+			mcp.WithString("symbol_name",
+				mcp.Required(),
+				mcp.Description("Symbol name to analyze"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			src, ok := req.Params.Arguments["src"].(string)
+			if !ok {
+				return mcp.NewToolResultError("src must be a string"), nil
+			}
+
+			symbolName, ok := req.Params.Arguments["symbol_name"].(string)
+			if !ok {
+				return mcp.NewToolResultError("symbol_name must be a string"), nil
+			}
+
+			result := tools.AnalyzeComplexity(src, symbolName)
+			if result == nil {
+				return mcp.NewToolResultText("Symbol not found"), nil
+			}
+
+			return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":"%s","complexity":%d,"rating":"%s"}`,
+				result.SymbolName, result.Score, result.Rating)), nil
+		},
+	)
+
+	// Sprint 3: find_similar_code
+	s.mcpServer.AddTool(
+		mcp.NewTool("find_similar_code",
+			mcp.WithDescription("Find code blocks similar to a query using Jaccard similarity"),
+			mcp.WithString("src",
+				mcp.Required(),
+				mcp.Description("Source code content"),
+			),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("Code snippet to search for"),
+			),
+			mcp.WithNumber("threshold",
+				mcp.Description("Similarity threshold [0.0, 1.0], default 0.3"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			src, ok := req.Params.Arguments["src"].(string)
+			if !ok {
+				return mcp.NewToolResultError("src must be a string"), nil
+			}
+
+			query, ok := req.Params.Arguments["query"].(string)
+			if !ok {
+				return mcp.NewToolResultError("query must be a string"), nil
+			}
+
+			threshold := 0.3
+			if raw, exists := req.Params.Arguments["threshold"]; exists && raw != nil {
+				switch value := raw.(type) {
+				case float64:
+					threshold = value
+				case int:
+					threshold = float64(value)
+				default:
+					return mcp.NewToolResultError("threshold must be a number"), nil
+				}
+			}
+
+			blocks := tools.FindSimilarCode(src, query, threshold)
+			data, err := json.Marshal(blocks)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal similar blocks: %v", err)), nil
+			}
+			return mcp.NewToolResultText(string(data)), nil
+		},
+	)
+
+	// Sprint 3: activate_project
+	s.mcpServer.AddTool(
+		mcp.NewTool("activate_project",
+			mcp.WithDescription("Set the active Delphi project directory"),
+			mcp.WithString("dir",
+				mcp.Required(),
+				mcp.Description("Path to the Delphi project directory"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			dir, ok := req.Params.Arguments["dir"].(string)
+			if !ok {
+				return mcp.NewToolResultError("dir must be a string"), nil
+			}
+
+			result, err := tools.ActivateProject(dir)
+			if err != nil {
+				return mcp.NewToolResultText("error: " + err.Error()), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// Sprint 3: build_query
+	s.mcpServer.AddTool(
+		mcp.NewTool("build_query",
+			mcp.WithDescription("Build a tree-sitter query for a Delphi node type and symbol"),
+			mcp.WithString("node_type",
+				mcp.Required(),
+				mcp.Description("Tree-sitter node type"),
+			),
+			mcp.WithString("symbol",
+				mcp.Description("Optional symbol name to filter"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			nodeType, ok := req.Params.Arguments["node_type"].(string)
+			if !ok {
+				return mcp.NewToolResultError("node_type must be a string"), nil
+			}
+
+			symbol := ""
+			if raw, exists := req.Params.Arguments["symbol"]; exists && raw != nil {
+				value, ok := raw.(string)
+				if !ok {
+					return mcp.NewToolResultError("symbol must be a string"), nil
+				}
+				symbol = value
+			}
+
+			return mcp.NewToolResultText(tools.BuildQuery(nodeType, symbol)), nil
+		},
+	)
+
+	// Sprint 3: adapt_query
+	s.mcpServer.AddTool(
+		mcp.NewTool("adapt_query",
+			mcp.WithDescription("Adapt a tree-sitter query to a different Pascal dialect"),
+			mcp.WithString("base",
+				mcp.Required(),
+				mcp.Description("Base query string"),
+			),
+			mcp.WithString("dialect",
+				mcp.Required(),
+				mcp.Description("Target dialect: delphi6, pascal, fpc"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			base, ok := req.Params.Arguments["base"].(string)
+			if !ok {
+				return mcp.NewToolResultError("base must be a string"), nil
+			}
+
+			dialect, ok := req.Params.Arguments["dialect"].(string)
+			if !ok {
+				return mcp.NewToolResultError("dialect must be a string"), nil
+			}
+
+			return mcp.NewToolResultText(tools.AdaptQuery(base, dialect)), nil
+		},
+	)
+	s.mcpServer.AddTool(mcp.NewTool("get_diagnostics_for_symbol",
+		mcp.WithDescription("Retorna diagnosticos do LSP relevantes para um simbolo"),
+		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo .pas")),
+		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome do simbolo")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filePath, _ := request.Params.Arguments["filePath"].(string)
+		symbolName, _ := request.Params.Arguments["symbolName"].(string)
+
+		result, err := tools.GetDiagnosticsForSymbol(s.ctx, s.lspClient, filePath, symbolName)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("find_implementations",
+		mcp.WithDescription("Encontra classes que implementam uma interface Delphi"),
+		mcp.WithString("filePath", mcp.Required(), mcp.Description("Arquivo onde a interface esta declarada")),
+		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome da interface")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filePath, _ := request.Params.Arguments["filePath"].(string)
+		symbolName, _ := request.Params.Arguments["symbolName"].(string)
+
+		result, err := tools.FindImplementations(s.ctx, s.lspClient, filePath, symbolName)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("get_node_at_position",
+		mcp.WithDescription("Retorna o token e contexto textual em uma posicao do arquivo"),
+		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo")),
+		mcp.WithString("line", mcp.Required(), mcp.Description("Numero de linha (1-indexado)")),
+		mcp.WithString("column", mcp.Required(), mcp.Description("Numero de coluna (1-indexado)")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		filePath, _ := request.Params.Arguments["filePath"].(string)
+		lineStr, _ := request.Params.Arguments["line"].(string)
+		columnStr, _ := request.Params.Arguments["column"].(string)
+
+		line := 0
+		column := 0
+		_, _ = fmt.Sscanf(lineStr, "%d", &line)
+		_, _ = fmt.Sscanf(columnStr, "%d", &column)
+
+		result, err := tools.GetNodeAtPosition(s.ctx, s.lspClient, filePath, line, column)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("get_node_types",
+		mcp.WithDescription("Retorna a lista de tipos de no suportados pelo Delphi 6"),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := tools.GetNodeTypes(s.ctx, s.lspClient)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("onboarding",
+		mcp.WithDescription("Escaneia estrutura do projeto Delphi e retorna inventario de units, forms e entry point"),
+		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		projectPath, _ := request.Params.Arguments["projectPath"].(string)
+		result, err := tools.PerformOnboarding(projectPath)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(result), nil
+	})
+
+	s.mcpServer.AddTool(mcp.NewTool("check_onboarding_performed",
+		mcp.WithDescription("Verifica se o onboarding ja foi executado para este projeto"),
+		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		projectPath, _ := request.Params.Arguments["projectPath"].(string)
+		performed, at := tools.CheckOnboardingPerformed(projectPath)
+		if !performed {
+			return mcp.NewToolResultText("Onboarding ainda nao foi executado para este projeto"), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Onboarding executado em: %s", at.Format(time.RFC3339))), nil
+	})
 
 	coreLogger.Info("Successfully registered all MCP tools")
 	return nil

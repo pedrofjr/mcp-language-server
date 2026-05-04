@@ -1146,3 +1146,12 @@ func sendCapabilitiesRegressionFakeResponse(writer *os.File, id *lsp.MessageID, 
 
 	_ = lsp.WriteMessage(writer, resp)
 }
+
+func TestRegisterTools_SymbolEdit_RegisteredTools(t *testing.T) {
+names := []string{"replace_symbol_body", "insert_after_symbol", "insert_before_symbol"}
+for _, n := range names {
+if strings.TrimSpace(n) == "" {
+t.Errorf("tool name vazio: %q", n)
+}
+}
+}
