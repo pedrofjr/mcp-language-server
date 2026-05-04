@@ -60,6 +60,26 @@ func TestGetCodeActions_CallsTextDocumentCodeActionAndReturnsJSON(t *testing.T) 
 	}
 }
 
+func TestGetCodeActions_NilDiagnosticsSentAsEmptyArray(t *testing.T) {
+	client, filePath, cleanup := setupCodeActionsFakeClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	// includeDiagnostics=false: must send diagnostics:[] not diagnostics:null
+	result, err := GetCodeActions(ctx, client, filePath, 1, 1, nil, false)
+	if err != nil {
+		t.Fatalf("expected no error when calling code_actions with includeDiagnostics=false, got: %v", err)
+	}
+
+	// Result should be a valid JSON array (possibly empty), not an error
+	var actions []map[string]any
+	if err := json.Unmarshal([]byte(result), &actions); err != nil {
+		t.Fatalf("expected JSON array result (got nil-diagnostics-safe response), but got unmarshal error: %v\noutput=%s", err, result)
+	}
+}
+
 func getCodeActionsViaRawLSPCall(ctx context.Context, client *lsp.Client, filePath string, line int, column int) (string, error) {
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {

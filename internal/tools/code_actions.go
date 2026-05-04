@@ -49,7 +49,7 @@ func GetCodeActions(
 		End:   protocol.Position{Line: lspLine, Character: lspChar + 1},
 	}
 
-	var diagnostics []protocol.Diagnostic
+	diagnostics := make([]protocol.Diagnostic, 0)
 	if includeDiagnostics {
 		diagnostics = client.GetFileDiagnostics(uri)
 	}
