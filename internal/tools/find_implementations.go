@@ -22,34 +22,21 @@ func findImplementationsTextScan(src, interfaceName string) []string {
 		return results
 	}
 
-	for lineIndex, line := range strings.Split(src, "\n") {
+	lines := strings.Split(src, "\n")
+	inClassHeritage := false
+	classLine := 0
+	className := ""
+	var heritageBuilder strings.Builder
+
+	for lineIndex, line := range lines {
 		lineWithoutComment := line
 		if commentIndex := strings.Index(lineWithoutComment, "//"); commentIndex >= 0 {
 			lineWithoutComment = lineWithoutComment[:commentIndex]
 		}
 
-		lower := strings.ToLower(strings.TrimSpace(lineWithoutComment))
-		if !strings.Contains(lower, "= class(") && !strings.Contains(lower, "= class (") {
-			continue
-		}
-
-		start := strings.Index(lower, "(")
-		if start < 0 {
-			continue
-		}
-
-		endRel := strings.Index(lower[start:], ")")
-		if endRel < 0 {
-			continue
-		}
-
-		heritage := lower[start+1 : start+endRel]
-		parts := strings.Split(heritage, ",")
-		for partIndex, part := range parts {
-			if partIndex == 0 {
-				continue
-			}
-			if strings.TrimSpace(part) != lowerIface {
+		trimmedLower := strings.ToLower(strings.TrimSpace(lineWithoutComment))
+		if !inClassHeritage {
+			if !strings.Contains(trimmedLower, "= class(") && !strings.Contains(trimmedLower, "= class (") {
 				continue
 			}
 
@@ -58,14 +45,51 @@ func findImplementationsTextScan(src, interfaceName string) []string {
 				continue
 			}
 
-			className := strings.TrimSpace(lineWithoutComment[:equalIndex])
+			className = strings.TrimSpace(lineWithoutComment[:equalIndex])
 			if className == "" {
 				continue
 			}
 
-			results = append(results, fmt.Sprintf("Line %d: %s implements %s", lineIndex+1, className, interfaceName))
+			openParenIndex := strings.Index(lineWithoutComment, "(")
+			if openParenIndex < 0 {
+				continue
+			}
+
+			inClassHeritage = true
+			classLine = lineIndex + 1
+			heritageBuilder.Reset()
+			heritageBuilder.WriteString(lineWithoutComment[openParenIndex+1:])
+		} else {
+			if heritageBuilder.Len() > 0 {
+				heritageBuilder.WriteByte('\n')
+			}
+			heritageBuilder.WriteString(lineWithoutComment)
+		}
+
+		heritageText := heritageBuilder.String()
+		closeParenIndex := strings.Index(heritageText, ")")
+		if closeParenIndex < 0 {
+			continue
+		}
+
+		heritageLower := strings.ToLower(heritageText[:closeParenIndex])
+		parts := strings.Split(heritageLower, ",")
+		for partIndex, part := range parts {
+			if partIndex == 0 {
+				continue
+			}
+			if strings.TrimSpace(part) != lowerIface {
+				continue
+			}
+
+			results = append(results, fmt.Sprintf("Line %d: %s implements %s", classLine, className, interfaceName))
 			break
 		}
+
+		inClassHeritage = false
+		classLine = 0
+		className = ""
+		heritageBuilder.Reset()
 	}
 
 	return results
@@ -74,9 +98,11 @@ func findImplementationsTextScan(src, interfaceName string) []string {
 // FindImplementations procura implementacoes de uma interface no workspace.
 // workspaceDir e o diretorio raiz do workspace; se vazio, usa o diretorio do arquivo.
 func FindImplementations(ctx context.Context, client *lsp.Client, filePath, symbolName, workspaceDir string) (string, error) {
-	lspResult, err := findImplementationsViaLSP(ctx, client, filePath, symbolName)
-	if err == nil && strings.TrimSpace(lspResult) != "" {
-		return lspResult, nil
+	if client != nil {
+		lspResult, err := findImplementationsViaLSP(ctx, client, filePath, symbolName)
+		if err == nil && strings.TrimSpace(lspResult) != "" {
+			return lspResult, nil
+		}
 	}
 
 	searchDir := workspaceDir
@@ -87,6 +113,10 @@ func FindImplementations(ctx context.Context, client *lsp.Client, filePath, symb
 }
 
 func findImplementationsViaLSP(ctx context.Context, client *lsp.Client, filePath, symbolName string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("lsp client is nil")
+	}
+
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
 		return "", err
@@ -97,20 +127,9 @@ func findImplementationsViaLSP(ctx context.Context, client *lsp.Client, filePath
 		return "", err
 	}
 
-	line := -1
-	column := -1
-	for lineIndex, sourceLine := range strings.Split(string(content), "\n") {
-		lowerLine := strings.ToLower(sourceLine)
-		matchIndex := strings.Index(lowerLine, strings.ToLower(symbolName))
-		if matchIndex >= 0 {
-			line = lineIndex
-			column = matchIndex
-			break
-		}
-	}
-
-	if line < 0 {
-		return "", fmt.Errorf("simbolo %q nao encontrado em %s", symbolName, normalizedPath)
+	line, column, err := findSymbolPositionExact(string(content), symbolName)
+	if err != nil {
+		return "", fmt.Errorf("simbolo %q nao encontrado com token exato em %s", symbolName, normalizedPath)
 	}
 
 	result, err := client.Implementation(ctx, protocol.ImplementationParams{
@@ -136,6 +155,81 @@ func findImplementationsViaLSP(ctx context.Context, client *lsp.Client, filePath
 		lines = append(lines, fmt.Sprintf("%s:L%d:C%d", loc.URI, loc.Range.Start.Line+1, loc.Range.Start.Character+1))
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func findSymbolPositionExact(src, symbolName string) (int, int, error) {
+	trimmedSymbol := strings.TrimSpace(symbolName)
+	if trimmedSymbol == "" {
+		return -1, -1, fmt.Errorf("symbol name is empty")
+	}
+
+	searchCandidates := []string{trimmedSymbol}
+	if dot := strings.LastIndex(trimmedSymbol, "."); dot >= 0 && dot+1 < len(trimmedSymbol) {
+		simpleName := trimmedSymbol[dot+1:]
+		if simpleName != "" && !strings.EqualFold(simpleName, trimmedSymbol) {
+			searchCandidates = append(searchCandidates, simpleName)
+		}
+	}
+
+	for lineIndex, sourceLine := range strings.Split(src, "\n") {
+		lineWithoutComment := sourceLine
+		if commentIndex := strings.Index(lineWithoutComment, "//"); commentIndex >= 0 {
+			lineWithoutComment = lineWithoutComment[:commentIndex]
+		}
+
+		for _, candidate := range searchCandidates {
+			if candidate == "" {
+				continue
+			}
+
+			lowerLine := strings.ToLower(lineWithoutComment)
+			lowerCandidate := strings.ToLower(candidate)
+			searchFrom := 0
+
+			for {
+				matchOffset := strings.Index(lowerLine[searchFrom:], lowerCandidate)
+				if matchOffset < 0 {
+					break
+				}
+
+				matchIndex := searchFrom + matchOffset
+				matchEnd := matchIndex + len(candidate)
+
+				if isIdentifierBoundary(lineWithoutComment, matchIndex-1) && isIdentifierBoundary(lineWithoutComment, matchEnd) {
+					return lineIndex, matchIndex, nil
+				}
+
+				searchFrom = matchIndex + len(candidate)
+				if searchFrom >= len(lowerLine) {
+					break
+				}
+			}
+		}
+	}
+
+	return -1, -1, fmt.Errorf("exact token not found")
+}
+
+func isIdentifierBoundary(line string, index int) bool {
+	if index < 0 || index >= len(line) {
+		return true
+	}
+
+	b := line[index]
+	if b == '_' {
+		return false
+	}
+	if b >= '0' && b <= '9' {
+		return false
+	}
+	if b >= 'A' && b <= 'Z' {
+		return false
+	}
+	if b >= 'a' && b <= 'z' {
+		return false
+	}
+
+	return true
 }
 
 func implementationResultToLocations(result protocol.Or_Result_textDocument_implementation) []protocol.Location {
