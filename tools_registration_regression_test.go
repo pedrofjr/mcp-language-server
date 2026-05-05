@@ -596,6 +596,243 @@ func TestRegisterTools_CodeActions_RegisteredAndValidatesParams(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_ActivateProject_InvalidDirReturnsToolError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "activate_project",
+			"arguments": map[string]any{
+				"dir": "C:/__invalid__/__missing__/project",
+			},
+		},
+		90,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal activate_project result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode activate_project result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected activate_project invalid dir to return isError=true, got payload: %s", string(resultBytes))
+	}
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "dir") {
+		t.Fatalf("expected activate_project invalid dir error to mention 'dir', got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_Diagnostics_ContextLinesBooleanDoesNotTriggerTypeError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "diagnostics",
+			"arguments": map[string]any{
+				"filePath":        "C:/tmp/does-not-exist.pas",
+				"contextLines":    true,
+				"showLineNumbers": true,
+			},
+		},
+		91,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal diagnostics result: %v", err)
+	}
+
+	payloadLower := strings.ToLower(string(resultBytes))
+	// Validate that contextLines=true does NOT trigger an argument validation error
+	// Errors from backend unavailability or file not found are acceptable.
+	if strings.Contains(payloadLower, "contextlines must") {
+		t.Fatalf("expected diagnostics with contextLines=true to avoid argument validation error, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_Diagnostics_UninitialiizedLspClientReturnsErrorFlag(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	// Deliberately skip initializeTestMCPServer to leave lspClient uninitialized
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "diagnostics",
+			"arguments": map[string]any{
+				"filePath":        "C:/tmp/test.pas",
+				"contextLines":    false,
+				"showLineNumbers": true,
+			},
+		},
+		91,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal diagnostics result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode diagnostics result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected diagnostics with uninitialized lspClient to return isError=true, got payload %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_NodeAtPosition_InvalidLineReturnsUsefulToolError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "get_node_at_position",
+			"arguments": map[string]any{
+				"filePath": "C:/tmp/sample.pas",
+				"line":     "abc",
+				"column":   "10",
+			},
+		},
+		92,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal get_node_at_position invalid-line result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode get_node_at_position invalid-line result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected get_node_at_position with non-numeric line to return isError=true, got %s", string(resultBytes))
+	}
+
+	payloadLower := strings.ToLower(string(resultBytes))
+	if !strings.Contains(payloadLower, "line") {
+		t.Fatalf("expected get_node_at_position invalid-line error to mention line, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_NodeAtPosition_AcceptsNumericLineAndColumn(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "get_node_at_position",
+			"arguments": map[string]any{
+				"filePath": "C:/tmp/sample.pas",
+				"line":     7.0,
+				"column":   12.0,
+			},
+		},
+		93,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal get_node_at_position numeric result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode get_node_at_position numeric result map: %v", err)
+	}
+
+	payloadLower := strings.ToLower(string(resultBytes))
+	// Validate that parsing did not fail due to type mismatch
+	if strings.Contains(payloadLower, "line") && strings.Contains(payloadLower, "type") {
+		t.Fatalf("expected get_node_at_position to accept numeric line/column without type error, got %s", string(resultBytes))
+	}
+	// Note: execution error (e.g., file not found) is acceptable here
+}
+
+func TestRegisterTools_NodeAtPosition_InternalExecutionErrorReturnsErrorFlag(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "get_node_at_position",
+			"arguments": map[string]any{
+				"filePath": "C:/__nonexistent__/__missing__/file.pas",
+				"line":     7.0,
+				"column":   12.0,
+			},
+		},
+		93,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal get_node_at_position nonexistent-file result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode get_node_at_position nonexistent-file result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected get_node_at_position with nonexistent file to return isError=true, got payload %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_MemoryAliases_ArePresentInToolsList(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 94)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	toolSet := make(map[string]struct{}, len(listResult.Tools))
+	for _, tool := range listResult.Tools {
+		toolSet[tool.Name] = struct{}{}
+	}
+
+	requiredAliases := []string{"write_memory", "read_memory", "list_memories", "edit_memory", "delete_memory"}
+	for _, alias := range requiredAliases {
+		if _, ok := toolSet[alias]; !ok {
+			t.Fatalf("expected tools/list to include memory alias %q", alias)
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 

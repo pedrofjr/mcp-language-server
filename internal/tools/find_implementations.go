@@ -72,14 +72,18 @@ func findImplementationsTextScan(src, interfaceName string) []string {
 }
 
 // FindImplementations procura implementacoes de uma interface no workspace.
-func FindImplementations(ctx context.Context, client *lsp.Client, filePath, symbolName string) (string, error) {
+// workspaceDir e o diretorio raiz do workspace; se vazio, usa o diretorio do arquivo.
+func FindImplementations(ctx context.Context, client *lsp.Client, filePath, symbolName, workspaceDir string) (string, error) {
 	lspResult, err := findImplementationsViaLSP(ctx, client, filePath, symbolName)
 	if err == nil && strings.TrimSpace(lspResult) != "" {
 		return lspResult, nil
 	}
 
-	dir := filepath.Dir(filePath)
-	return findImplementationsInDir(dir, symbolName)
+	searchDir := workspaceDir
+	if searchDir == "" {
+		searchDir = filepath.Dir(filePath)
+	}
+	return findImplementationsInDir(searchDir, symbolName)
 }
 
 func findImplementationsViaLSP(ctx context.Context, client *lsp.Client, filePath, symbolName string) (string, error) {

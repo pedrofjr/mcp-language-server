@@ -5,12 +5,71 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func parseContextLinesArgument(raw any, defaultValue int) (int, error) {
+	if raw == nil {
+		return defaultValue, nil
+	}
+
+	switch value := raw.(type) {
+	case bool:
+		if value {
+			return defaultValue, nil
+		}
+		return 0, nil
+	case float64:
+		if value != math.Trunc(value) {
+			return 0, fmt.Errorf("contextLines must be a boolean or integer")
+		}
+		return int(value), nil
+	case int:
+		return value, nil
+	default:
+		return 0, fmt.Errorf("contextLines must be a boolean or integer")
+	}
+}
+
+func parsePositiveIntegerArgument(raw any, argName string) (int, error) {
+	if raw == nil {
+		return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+	}
+
+	switch value := raw.(type) {
+	case float64:
+		if value != math.Trunc(value) {
+			return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+		}
+		parsed := int(value)
+		if parsed < 1 {
+			return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+		}
+		return parsed, nil
+	case int:
+		if value < 1 {
+			return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+		}
+		return value, nil
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err != nil || parsed < 1 {
+			return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("%s must be an integer >= 1", argName)
+	}
+}
 
 func (s *mcpServer) registerTools() error {
 	coreLogger.Debug("Registering MCP tools")
@@ -170,14 +229,18 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError("filePath must be a string"), nil
 		}
 
-		contextLines := 5 // default value
-		if contextLinesArg, ok := request.Params.Arguments["contextLines"].(int); ok {
-			contextLines = contextLinesArg
+		contextLines, err := parseContextLinesArgument(request.Params.Arguments["contextLines"], 5)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		showLineNumbers := true // default value
 		if showLineNumbersArg, ok := request.Params.Arguments["showLineNumbers"].(bool); ok {
 			showLineNumbers = showLineNumbersArg
+		}
+
+		if s.lspClient == nil {
+			return mcp.NewToolResultError("lspClient not initialized"), nil
 		}
 
 		coreLogger.Debug("Executing diagnostics for file: %s", filePath)
@@ -922,12 +985,7 @@ func (s *mcpServer) registerTools() error {
 	)
 
 	// === Sprint 2 - Memoria ===
-	s.mcpServer.AddTool(mcp.NewTool("memory_write",
-		mcp.WithDescription("Cria uma entrada de memoria persistente para o agente"),
-		mcp.WithString("title", mcp.Required(), mcp.Description("Titulo da entrada")),
-		mcp.WithString("content", mcp.Required(), mcp.Description("Conteudo a memorizar")),
-		mcp.WithString("tags", mcp.Description("Tags separadas por virgula")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryWriteHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		title, _ := request.Params.Arguments["title"].(string)
 		content, _ := request.Params.Arguments["content"].(string)
 		tagsStr, _ := request.Params.Arguments["tags"].(string)
@@ -946,24 +1004,18 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText("Entrada criada com ID: " + id), nil
-	})
+	}
 
-	s.mcpServer.AddTool(mcp.NewTool("memory_read",
-		mcp.WithDescription("Le uma entrada de memoria pelo ID"),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryReadHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		entry, err := tools.MemoryRead(id)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("# %s\n\n%s\nTags: %s", entry.Title, entry.Content, strings.Join(entry.Tags, ", "))), nil
-	})
+	}
 
-	s.mcpServer.AddTool(mcp.NewTool("memory_list",
-		mcp.WithDescription("Lista entradas de memoria, opcionalmente filtradas por tag"),
-		mcp.WithString("tag", mcp.Description("Filtrar por tag (opcional)")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryListHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		tag, _ := request.Params.Arguments["tag"].(string)
 		entries, err := tools.MemoryList(tag)
 		if err != nil {
@@ -983,43 +1035,91 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		return mcp.NewToolResultText(builder.String()), nil
-	})
+	}
 
-	s.mcpServer.AddTool(mcp.NewTool("memory_edit",
-		mcp.WithDescription("Edita o conteudo de uma entrada de memoria"),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
-		mcp.WithString("content", mcp.Required(), mcp.Description("Novo conteudo")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryEditHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		content, _ := request.Params.Arguments["content"].(string)
 		if err := tools.MemoryEdit(id, content); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText("Entrada atualizada com sucesso"), nil
-	})
+	}
 
-	s.mcpServer.AddTool(mcp.NewTool("memory_delete",
-		mcp.WithDescription("Remove uma entrada de memoria pelo ID"),
-		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryDeleteHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		if err := tools.MemoryDelete(id); err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return mcp.NewToolResultText("Entrada removida com sucesso"), nil
-	})
+	}
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_write",
+		mcp.WithDescription("Cria uma entrada de memoria persistente para o agente"),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Titulo da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Conteudo a memorizar")),
+		mcp.WithString("tags", mcp.Description("Tags separadas por virgula")),
+	), memoryWriteHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("write_memory",
+		mcp.WithDescription("Alias de memory_write"),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Titulo da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Conteudo a memorizar")),
+		mcp.WithString("tags", mcp.Description("Tags separadas por virgula")),
+	), memoryWriteHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_read",
+		mcp.WithDescription("Le uma entrada de memoria pelo ID"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), memoryReadHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("read_memory",
+		mcp.WithDescription("Alias de memory_read"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), memoryReadHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_list",
+		mcp.WithDescription("Lista entradas de memoria, opcionalmente filtradas por tag"),
+		mcp.WithString("tag", mcp.Description("Filtrar por tag (opcional)")),
+	), memoryListHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("list_memories",
+		mcp.WithDescription("Alias de memory_list"),
+		mcp.WithString("tag", mcp.Description("Filtrar por tag (opcional)")),
+	), memoryListHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_edit",
+		mcp.WithDescription("Edita o conteudo de uma entrada de memoria"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Novo conteudo")),
+	), memoryEditHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("edit_memory",
+		mcp.WithDescription("Alias de memory_edit"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Novo conteudo")),
+	), memoryEditHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_delete",
+		mcp.WithDescription("Remove uma entrada de memoria pelo ID"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), memoryDeleteHandler)
+
+	s.mcpServer.AddTool(mcp.NewTool("delete_memory",
+		mcp.WithDescription("Alias de memory_delete"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("ID da entrada")),
+	), memoryDeleteHandler)
 
 	// === Sprint 2 - Edicao e Analise ===
 	s.mcpServer.AddTool(mcp.NewTool("safe_delete_symbol",
 		mcp.WithDescription("Remove um simbolo Delphi com verificacao de referencias"),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo .pas")),
 		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome do simbolo a remover")),
-		mcp.WithString("force", mcp.Description("true para remover mesmo com referencias")),
+		mcp.WithBoolean("force", mcp.Description("true para remover mesmo com referencias existentes")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
-		forceStr, _ := request.Params.Arguments["force"].(string)
-		force := strings.EqualFold(forceStr, "true")
+		force, _ := request.Params.Arguments["force"].(bool)
 
 		result, err := tools.SafeDeleteSymbol(s.ctx, s.lspClient, filePath, symbolName, force)
 		if err != nil {
@@ -1127,7 +1227,7 @@ func (s *mcpServer) registerTools() error {
 
 			result, err := tools.ActivateProject(dir)
 			if err != nil {
-				return mcp.NewToolResultText("error: " + err.Error()), nil
+				return mcp.NewToolResultError("error: " + err.Error()), nil
 			}
 			return mcp.NewToolResultText(result), nil
 		},
@@ -1214,7 +1314,7 @@ func (s *mcpServer) registerTools() error {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 
-		result, err := tools.FindImplementations(s.ctx, s.lspClient, filePath, symbolName)
+		result, err := tools.FindImplementations(s.ctx, s.lspClient, filePath, symbolName, s.config.workspaceDir)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -1224,17 +1324,19 @@ func (s *mcpServer) registerTools() error {
 	s.mcpServer.AddTool(mcp.NewTool("get_node_at_position",
 		mcp.WithDescription("Retorna o token e contexto textual em uma posicao do arquivo"),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo")),
-		mcp.WithString("line", mcp.Required(), mcp.Description("Numero de linha (1-indexado)")),
-		mcp.WithString("column", mcp.Required(), mcp.Description("Numero de coluna (1-indexado)")),
+		mcp.WithNumber("line", mcp.Required(), mcp.Description("Numero de linha (1-indexado)")),
+		mcp.WithNumber("column", mcp.Required(), mcp.Description("Numero de coluna (1-indexado)")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
-		lineStr, _ := request.Params.Arguments["line"].(string)
-		columnStr, _ := request.Params.Arguments["column"].(string)
+		line, err := parsePositiveIntegerArgument(request.Params.Arguments["line"], "line")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
-		line := 0
-		column := 0
-		_, _ = fmt.Sscanf(lineStr, "%d", &line)
-		_, _ = fmt.Sscanf(columnStr, "%d", &column)
+		column, err := parsePositiveIntegerArgument(request.Params.Arguments["column"], "column")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		result, err := tools.GetNodeAtPosition(s.ctx, s.lspClient, filePath, line, column)
 		if err != nil {
