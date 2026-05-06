@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -831,6 +833,354 @@ func TestRegisterTools_MemoryAliases_ArePresentInToolsList(t *testing.T) {
 			t.Fatalf("expected tools/list to include memory alias %q", alias)
 		}
 	}
+}
+
+func TestRegisterTools_RunQuery_IsRegisteredInToolsList(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 95)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	foundRunQuery := false
+	for _, tool := range listResult.Tools {
+		if tool.Name == "run_query" {
+			foundRunQuery = true
+			break
+		}
+	}
+
+	if !foundRunQuery {
+		t.Fatal("expected run_query to be explicitly registered in tools/list")
+	}
+}
+
+func TestRegisterTools_RunQuery_RequiresQueryOrNodeType(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name":      "run_query",
+			"arguments": map[string]any{},
+		},
+		96,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query empty-args result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query empty-args result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query with no query/node_type to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "query or node_type") {
+		t.Fatalf("expected run_query validation error to mention required query or node_type, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_RunQuery_InvalidLimitReturnsError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": "procedure_declaration",
+				"limit": 0,
+			},
+		},
+		97,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query invalid-limit result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query invalid-limit result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query with invalid limit to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "limit") {
+		t.Fatalf("expected run_query invalid-limit error to mention limit constraint, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_RunQuery_MinimalHappyPathReturnsExpectedShape(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": "procedure_declaration",
+				"limit": 1,
+			},
+		},
+		98,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query happy-path result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query happy-path result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected run_query minimal happy path to succeed, got error payload %s", string(resultBytes))
+	}
+
+	contentRaw, ok := callResult["content"].([]any)
+	if !ok || len(contentRaw) == 0 {
+		t.Fatalf("expected run_query success payload to include content array, got %s", string(resultBytes))
+	}
+
+	firstContent, ok := contentRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first content entry to be an object, got %s", string(resultBytes))
+	}
+
+	textPayload, _ := firstContent["text"].(string)
+	if textPayload == "" {
+		t.Fatalf("expected run_query success payload to include text JSON body, got %s", string(resultBytes))
+	}
+
+	var shaped map[string]any
+	if err := json.Unmarshal([]byte(textPayload), &shaped); err != nil {
+		t.Fatalf("expected run_query text payload to be valid JSON, decode failed: %v; payload=%s", err, textPayload)
+	}
+
+	if _, ok := shaped["query"]; !ok {
+		t.Fatalf("expected run_query response JSON to contain 'query', got %v", shaped)
+	}
+	if _, ok := shaped["totalMatches"]; !ok {
+		t.Fatalf("expected run_query response JSON to contain 'totalMatches', got %v", shaped)
+	}
+	if _, ok := shaped["matches"]; !ok {
+		t.Fatalf("expected run_query response JSON to contain 'matches', got %v", shaped)
+	}
+}
+
+func TestRegisterTools_RunQuery_FilePathUsesRequestedFileAndPreservesSuccessShape(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "query-target.pas")
+	const queryText = "UniqueProcedureDeclarationToken"
+	if err := os.WriteFile(targetFile, []byte("procedure "+queryText+";\n"), 0o600); err != nil {
+		t.Fatalf("failed to write temp file for run_query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":    queryText,
+				"filePath": targetFile,
+				"limit":    5,
+			},
+		},
+		99,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query with filePath to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	if got, _ := shaped["query"].(string); got != queryText {
+		t.Fatalf("expected run_query response JSON to preserve query %q, got %q", queryText, got)
+	}
+	if _, ok := shaped["totalMatches"]; !ok {
+		t.Fatalf("expected run_query response JSON to contain 'totalMatches', got %v", shaped)
+	}
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query response JSON to contain array field 'matches', got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query with filePath to return at least one match from %q, got %v", targetFile, shaped)
+	}
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first run_query match to be an object, got %T", matches[0])
+	}
+	if gotFile, _ := firstMatch["file"].(string); gotFile != targetFile {
+		t.Fatalf("expected run_query to scan requested file %q, got %q", targetFile, gotFile)
+	}
+}
+
+func TestRegisterTools_RunQuery_InvalidFilePathReturnsError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist.pas")
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":    "procedure",
+				"filePath": missingPath,
+			},
+		},
+		100,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query invalid-filePath result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query invalid-filePath result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query with invalid filePath to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "filepath") && !strings.Contains(strings.ToLower(string(resultBytes)), "read") {
+		t.Fatalf("expected run_query invalid filePath error to mention filePath/read failure, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_RunQuery_ReturnsErrorWhenNoFilesCanBeRead(t *testing.T) {
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to capture working directory: %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to change working directory for run_query test: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("failed to restore working directory: %v", chdirErr)
+		}
+	})
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": "procedure_declaration",
+			},
+		},
+		101,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query no-readable-files result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query no-readable-files result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query with no readable files to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "read") {
+		t.Fatalf("expected run_query no-readable-files error to mention read failure, got %s", string(resultBytes))
+	}
+}
+
+func decodeRunQueryCallResult(t *testing.T, result any, dest *map[string]any) {
+	t.Helper()
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query result: %v", err)
+	}
+
+	if err := json.Unmarshal(resultBytes, dest); err != nil {
+		t.Fatalf("failed to decode run_query result map: %v", err)
+	}
+}
+
+func decodeRunQuerySuccessPayload(t *testing.T, callResult map[string]any) map[string]any {
+	t.Helper()
+
+	contentRaw, ok := callResult["content"].([]any)
+	if !ok || len(contentRaw) == 0 {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query success payload to include content array, got %s", string(resultBytes))
+	}
+
+	firstContent, ok := contentRaw[0].(map[string]any)
+	if !ok {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected first content entry to be an object, got %s", string(resultBytes))
+	}
+
+	textPayload, _ := firstContent["text"].(string)
+	if textPayload == "" {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query success payload to include text JSON body, got %s", string(resultBytes))
+	}
+
+	var shaped map[string]any
+	if err := json.Unmarshal([]byte(textPayload), &shaped); err != nil {
+		t.Fatalf("expected run_query text payload to be valid JSON, decode failed: %v; payload=%s", err, textPayload)
+	}
+
+	return shaped
 }
 
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {

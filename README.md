@@ -175,6 +175,103 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `hover`: Display documentation, type hints, or other hover information for a given location.
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
+- `run_query`: Executes the current minimal query engine and returns a JSON payload with deterministic textual matches.
+
+## run_query
+
+Status atual: implementado em versão mínima funcional.
+
+O `run_query` já está disponível para uso, mas neste estágio ainda nao executa uma busca estrutural tree-sitter plena. O comportamento atual faz uma varredura textual determinística em um conjunto pequeno de arquivos candidatos e retorna um payload JSON estável, suficiente para integração inicial, testes de contrato e evolução incremental da API.
+
+### Parâmetros
+
+- `query` (string, opcional): texto procurado nas linhas do arquivo. Se informado, é o valor principal usado na busca.
+- `node_type` (string, opcional): fallback usado quando `query` não for informado.
+- `filePath` (string, opcional): caminho de arquivo a ser lido primeiro. Quando presente, deve apontar para um arquivo existente.
+- `limit` (number, opcional): quantidade máxima de ocorrências retornadas. Valor padrão: `20`. Deve ser maior que `0`.
+
+Regra de validação mínima:
+
+- É obrigatório informar `query` ou `node_type`.
+- `query`, `node_type` e `filePath` precisam ser strings quando fornecidos.
+- `filePath` inválido ou diretório retorna erro.
+
+### Retorno
+
+O resultado MCP é devolvido como texto contendo JSON com o formato abaixo:
+
+```json
+{
+  "query": "procedure_declaration",
+  "totalMatches": 1,
+  "matches": [
+    {
+      "file": "C:\\repo\\query-target.pas",
+      "line": 1,
+      "text": "procedure UniqueProcedureDeclarationToken;"
+    }
+  ]
+}
+```
+
+Campos atuais:
+
+- `query`: valor efetivamente usado na busca, após trim e fallback para `node_type` quando necessário.
+- `totalMatches`: quantidade retornada no payload atual.
+- `matches`: lista de objetos com `file`, `line` e `text`.
+
+### Exemplos
+
+Busca mínima por texto:
+
+```json
+{
+  "name": "run_query",
+  "arguments": {
+    "query": "procedure_declaration",
+    "limit": 5
+  }
+}
+```
+
+Busca priorizando um arquivo específico:
+
+```json
+{
+  "name": "run_query",
+  "arguments": {
+    "query": "UniqueProcedureDeclarationToken",
+    "filePath": "C:\\repo\\query-target.pas",
+    "limit": 5
+  }
+}
+```
+
+Busca usando `node_type` como fallback quando `query` não é enviado:
+
+```json
+{
+  "name": "run_query",
+  "arguments": {
+    "node_type": "procedure_declaration",
+    "limit": 3
+  }
+}
+```
+
+### Limitações atuais
+
+- Ainda não executa query tree-sitter real.
+- Ainda não retorna `range`, capturas, `nodeType`, score ou contexto estrutural.
+- `filePath` hoje prioriza a leitura do arquivo informado, mas não limita sozinho a busca a esse arquivo; há fallback para candidatos internos adicionais.
+- O resultado é textual e determinístico, útil como baseline de contrato, não como busca estrutural SOTA.
+
+### Próximos passos para a versão SOTA
+
+- Executar queries tree-sitter reais sobre Delphi.
+- Retornar matches estruturados com `range`, tipo de nó e capturas.
+- Permitir filtro estrito por arquivo, diretório e escopo sintático.
+- Evoluir o payload para cenários de auditoria, refactor assistido e navegação estrutural.
 
 ## About
 

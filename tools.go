@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +71,126 @@ func parsePositiveIntegerArgument(raw any, argName string) (int, error) {
 	default:
 		return 0, fmt.Errorf("%s must be an integer >= 1", argName)
 	}
+}
+
+func parseOptionalPositiveIntegerArgument(raw any, defaultValue int, argName string) (int, error) {
+	if raw == nil {
+		return defaultValue, nil
+	}
+
+	value, err := parsePositiveIntegerArgument(raw, argName)
+	if err != nil {
+		return 0, err
+	}
+
+	return value, nil
+}
+
+func runQueryCandidates(filePath string) ([]string, error) {
+	baseCandidates := []string{"internal/tools/query_builder.go", "tools.go"}
+	seen := make(map[string]struct{}, len(baseCandidates)+1)
+	candidates := make([]string, 0, len(baseCandidates)+1)
+
+	if trimmed := strings.TrimSpace(filePath); trimmed != "" {
+		cleaned := filepath.Clean(trimmed)
+		info, err := os.Stat(cleaned)
+		if err != nil {
+			return nil, fmt.Errorf("filePath could not be read: %w", err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("filePath must point to a file: %s", cleaned)
+		}
+		seen[cleaned] = struct{}{}
+		candidates = append(candidates, cleaned)
+	}
+
+	for _, candidate := range baseCandidates {
+		cleaned := filepath.Clean(candidate)
+		if _, exists := seen[cleaned]; exists {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		candidates = append(candidates, cleaned)
+	}
+
+	return candidates, nil
+}
+
+func runQueryTextScan(query string, nodeType string, filePath string, limit int) (string, error) {
+	type runQueryMatch struct {
+		File string `json:"file"`
+		Line int    `json:"line"`
+		Text string `json:"text"`
+	}
+
+	type runQueryResponse struct {
+		Query        string          `json:"query"`
+		TotalMatches int             `json:"totalMatches"`
+		Matches      []runQueryMatch `json:"matches"`
+	}
+
+	needle := strings.TrimSpace(query)
+	if needle == "" {
+		needle = strings.TrimSpace(nodeType)
+	}
+
+	fileCandidates, err := runQueryCandidates(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	matches := make([]runQueryMatch, 0, limit)
+	needleLower := strings.ToLower(needle)
+	readableFiles := 0
+
+	for _, candidate := range fileCandidates {
+		if len(matches) >= limit {
+			break
+		}
+
+		content, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		readableFiles++
+
+		lines := strings.Split(string(content), "\n")
+		for index, rawLine := range lines {
+			if len(matches) >= limit {
+				break
+			}
+
+			line := strings.TrimSpace(rawLine)
+			if line == "" {
+				continue
+			}
+
+			if strings.Contains(strings.ToLower(line), needleLower) {
+				matches = append(matches, runQueryMatch{
+					File: candidate,
+					Line: index + 1,
+					Text: line,
+				})
+			}
+		}
+	}
+
+	if readableFiles == 0 {
+		return "", fmt.Errorf("no readable files available for run_query")
+	}
+
+	response := runQueryResponse{
+		Query:        needle,
+		TotalMatches: len(matches),
+		Matches:      matches,
+	}
+
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal run_query response: %w", err)
+	}
+
+	return string(payload), nil
 }
 
 func (s *mcpServer) registerTools() error {
@@ -1289,6 +1411,69 @@ func (s *mcpServer) registerTools() error {
 			}
 
 			return mcp.NewToolResultText(tools.AdaptQuery(base, dialect)), nil
+		},
+	)
+
+	// Sprint 3: run_query
+	s.mcpServer.AddTool(
+		mcp.NewTool("run_query",
+			mcp.WithDescription("Run a minimal deterministic textual query scan and return JSON results."),
+			mcp.WithString("query",
+				mcp.Description("Text query used to match source lines."),
+			),
+			mcp.WithString("node_type",
+				mcp.Description("Fallback node type when query is omitted."),
+			),
+			mcp.WithString("filePath",
+				mcp.Description("Optional file path to scan first. Must point to an existing file when provided."),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Maximum number of matches to return. Must be > 0."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query := ""
+			if raw, exists := req.Params.Arguments["query"]; exists && raw != nil {
+				value, ok := raw.(string)
+				if !ok {
+					return mcp.NewToolResultError("query must be a string"), nil
+				}
+				query = strings.TrimSpace(value)
+			}
+
+			nodeType := ""
+			if raw, exists := req.Params.Arguments["node_type"]; exists && raw != nil {
+				value, ok := raw.(string)
+				if !ok {
+					return mcp.NewToolResultError("node_type must be a string"), nil
+				}
+				nodeType = strings.TrimSpace(value)
+			}
+
+			if query == "" && nodeType == "" {
+				return mcp.NewToolResultError("query or node_type must be provided"), nil
+			}
+
+			filePath := ""
+			if raw, exists := req.Params.Arguments["filePath"]; exists && raw != nil {
+				value, ok := raw.(string)
+				if !ok {
+					return mcp.NewToolResultError("filePath must be a string"), nil
+				}
+				filePath = value
+			}
+
+			limit, err := parseOptionalPositiveIntegerArgument(req.Params.Arguments["limit"], 20, "limit")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			result, err := runQueryTextScan(query, nodeType, filePath, limit)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+
+			return mcp.NewToolResultText(result), nil
 		},
 	)
 	s.mcpServer.AddTool(mcp.NewTool("get_diagnostics_for_symbol",
