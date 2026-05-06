@@ -12,10 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
+	sitter "github.com/smacker/go-tree-sitter"
+	tree_sitter_delphi6 "github.com/tree-sitter/tree-sitter-delphi6"
 )
 
 func parseContextLinesArgument(raw any, defaultValue int) (int, error) {
@@ -197,6 +198,31 @@ func inferRunQueryNodeType(line string) string {
 	}
 }
 
+func nodeTypeKeywordPrefix(nodeType string) string {
+	prefixes := map[string]string{
+		"procedure_declaration":          "procedure",
+		"function_declaration":           "function",
+		"constructor_declaration":        "constructor",
+		"destructor_declaration":         "destructor",
+		"class_procedure_declaration":    "class",
+		"class_function_declaration":     "class",
+		"procedure_implementation":       "procedure",
+		"function_implementation":        "function",
+		"constructor_implementation":     "constructor",
+		"destructor_implementation":      "destructor",
+		"class_procedure_implementation": "class",
+		"class_function_implementation":  "class",
+		"unit_declaration":               "unit",
+		"program_declaration":            "program",
+		"library_declaration":            "library",
+		"uses_clause":                    "uses",
+		"const_section":                  "const",
+		"type_section":                   "type",
+		"var_section":                    "var",
+	}
+	return prefixes[nodeType]
+}
+
 func runQueryTextScan(query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	type runQueryMatch struct {
 		FilePath    string `json:"filePath"`
@@ -221,6 +247,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 	if needle == "" {
 		needle = strings.TrimSpace(nodeType)
 	}
+	needleLower := strings.ToLower(needle)
 
 	fileCandidates, err := runQueryCandidates(filePath, strictFilePath)
 	if err != nil {
@@ -228,63 +255,198 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 	}
 
 	matches := make([]runQueryMatch, 0, limit)
-	needleLower := strings.ToLower(needle)
 	readableFiles := 0
+
+	lang := sitter.NewLanguage(tree_sitter_delphi6.Language())
+	parser := sitter.NewParser()
+	parser.SetLanguage(lang)
+
+	appendNodeMatch := func(candidate string, previewLines []string, treeContent []byte, node *sitter.Node, lineOffset int, minByte uint32, maxByte uint32) {
+		if node == nil || len(matches) >= limit {
+			return
+		}
+
+		if maxByte > minByte {
+			if node.StartByte() < minByte || node.EndByte() > maxByte {
+				return
+			}
+		}
+
+		nodeTypeValue := node.Type()
+		nodeTypeLower := strings.ToLower(nodeTypeValue)
+		if nodeTypeLower == "comment" || strings.Contains(nodeTypeLower, "comment") {
+			return
+		}
+
+		nodeText := node.Content(treeContent)
+		if needleLower != "" && !strings.Contains(strings.ToLower(nodeText), needleLower) {
+			return
+		}
+
+		startPoint := node.StartPoint()
+		endPoint := node.EndPoint()
+		startLine := int(startPoint.Row) + 1 + lineOffset
+		startColumn := int(startPoint.Column) + 1
+		endLine := int(endPoint.Row) + 1 + lineOffset
+		endColumn := int(endPoint.Column) + 1
+		if startLine < 1 || endLine < 1 {
+			return
+		}
+		if endColumn < 1 {
+			endColumn = 1
+		}
+
+		preview := ""
+		if startLine >= 1 && startLine <= len(previewLines) {
+			preview = strings.TrimSpace(previewLines[startLine-1])
+		}
+
+		matches = append(matches, runQueryMatch{
+			FilePath:    candidate,
+			StartLine:   startLine,
+			StartColumn: startColumn,
+			EndLine:     endLine,
+			EndColumn:   endColumn,
+			NodeType:    nodeTypeValue,
+			Preview:     preview,
+			File:        candidate,
+			Line:        startLine,
+			Text:        preview,
+		})
+	}
+
+	trimmedNodeType := strings.TrimSpace(nodeType)
+	var queryNodeType *sitter.Query
+	if trimmedNodeType != "" {
+		pattern := fmt.Sprintf("(%s) @match", trimmedNodeType)
+		q, qErr := sitter.NewQuery([]byte(pattern), lang)
+		if qErr != nil {
+			return "", fmt.Errorf("invalid node_type %q: tree-sitter query error: %w", nodeType, qErr)
+		}
+		queryNodeType = q
+		defer queryNodeType.Close()
+	}
 
 	for _, candidate := range fileCandidates {
 		if len(matches) >= limit {
 			break
 		}
 
-		content, err := os.ReadFile(candidate)
-		if err != nil {
+		content, readErr := os.ReadFile(candidate)
+		if readErr != nil {
 			continue
 		}
 		readableFiles++
 
-		lines := strings.Split(string(content), "\n")
-		for index, rawLine := range lines {
-			if len(matches) >= limit {
-				break
+		processTree := func(tree *sitter.Tree, treeContent []byte, previewLines []string, lineOffset int, minByte uint32, maxByte uint32) {
+			if tree == nil {
+				return
+			}
+			root := tree.RootNode()
+			if root == nil {
+				return
+			}
+			startCount := len(matches)
+
+			if queryNodeType != nil {
+				cursor := sitter.NewQueryCursor()
+				cursor.Exec(queryNodeType, root)
+				for len(matches) < limit {
+					match, ok := cursor.NextMatch()
+					if !ok {
+						break
+					}
+
+					match = cursor.FilterPredicates(match, treeContent)
+					if match == nil {
+						continue
+					}
+
+					for _, capture := range match.Captures {
+						if len(matches) >= limit {
+							break
+						}
+						appendNodeMatch(candidate, previewLines, treeContent, capture.Node, lineOffset, minByte, maxByte)
+					}
+				}
+				cursor.Close()
+
+				if len(matches) > startCount {
+					return
+				}
+
+				stack := []*sitter.Node{root}
+				for len(stack) > 0 && len(matches) < limit {
+					last := len(stack) - 1
+					node := stack[last]
+					stack = stack[:last]
+
+					if node == nil {
+						continue
+					}
+
+					if node.Type() == trimmedNodeType {
+						appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte)
+					}
+
+					for idx := int(node.ChildCount()) - 1; idx >= 0; idx-- {
+						child := node.Child(idx)
+						if child != nil {
+							stack = append(stack, child)
+						}
+					}
+				}
+				return
 			}
 
-			line := strings.TrimSpace(rawLine)
-			if line == "" {
-				continue
-			}
+			stack := []*sitter.Node{root}
+			for len(stack) > 0 && len(matches) < limit {
+				last := len(stack) - 1
+				node := stack[last]
+				stack = stack[:last]
 
-			lowerRaw := strings.ToLower(rawLine)
-			if strings.Contains(lowerRaw, needleLower) {
-				byteOffset := strings.Index(lowerRaw, needleLower)
-				if byteOffset < 0 {
+				if node == nil {
 					continue
 				}
 
-				startColumn := utf8.RuneCountInString(rawLine[:byteOffset]) + 1
-				matchWidth := utf8.RuneCountInString(needle)
-				if byteOffset+len(needle) <= len(rawLine) {
-					matchedSlice := rawLine[byteOffset : byteOffset+len(needle)]
-					matchWidth = utf8.RuneCountInString(matchedSlice)
+				if node.IsNamed() {
+					appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte)
 				}
-				if matchWidth < 1 {
-					matchWidth = 1
-				}
-				endColumn := startColumn + matchWidth - 1
 
-				matches = append(matches, runQueryMatch{
-					FilePath:    candidate,
-					StartLine:   index + 1,
-					StartColumn: startColumn,
-					EndLine:     index + 1,
-					EndColumn:   endColumn,
-					NodeType:    inferRunQueryNodeType(rawLine),
-					Preview:     line,
-					File:        candidate,
-					Line:        index + 1,
-					Text:        line,
-				})
+				for idx := int(node.ChildCount()) - 1; idx >= 0; idx-- {
+					child := node.Child(idx)
+					if child != nil {
+						stack = append(stack, child)
+					}
+				}
 			}
 		}
+
+		lines := strings.Split(string(content), "\n")
+		tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+		if parseErr == nil && tree != nil {
+			before := len(matches)
+			processTree(tree, content, lines, 0, 0, uint32(len(content)))
+
+			root := tree.RootNode()
+			needsSynthetic := len(matches) == before && root != nil && (root.IsError() || root.HasError())
+			if !needsSynthetic {
+				continue
+			}
+		}
+
+		prefix := "unit __run_query_tmp__;\ninterface\n"
+		suffix := "\nimplementation\nend.\n"
+		wrappedContent := []byte(prefix + string(content) + suffix)
+		wrappedTree, wrappedErr := parser.ParseCtx(context.Background(), nil, wrappedContent)
+		if wrappedErr != nil || wrappedTree == nil {
+			continue
+		}
+
+		prefixLines := strings.Count(prefix, "\n")
+		startByte := uint32(len(prefix))
+		endByte := uint32(len(prefix) + len(content))
+		processTree(wrappedTree, wrappedContent, lines, -prefixLines, startByte, endByte)
 	}
 
 	if readableFiles == 0 {
