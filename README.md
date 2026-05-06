@@ -175,25 +175,28 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `hover`: Display documentation, type hints, or other hover information for a given location.
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
-- `run_query`: Executes the current minimal query engine and returns a JSON payload with deterministic textual matches.
+- `run_query`: Executa o motor de consulta v2 com varredura Delphi no workspace, shape estruturado de matches e compatibilidade legada.
 
 ## run_query
 
-Status atual: implementado em versão mínima funcional.
+Status atual: v2 entregue (baseline estável), ainda abaixo de SOTA estrutural.
 
-O `run_query` já está disponível para uso, mas neste estágio ainda nao executa uma busca estrutural tree-sitter plena. O comportamento atual faz uma varredura textual determinística em um conjunto pequeno de arquivos candidatos e retorna um payload JSON estável, suficiente para integração inicial, testes de contrato e evolução incremental da API.
+O `run_query` está disponível em uma versão v2 que amplia o contrato anterior. Ele realiza varredura textual determinística em arquivos Delphi do workspace (`.pas`, `.dpr`, `.dpk`), permite recorte estrito por arquivo e retorna matches em shape estruturado. O objetivo desta versão é garantir integração previsível para agentes e clientes sem quebrar compatibilidade com consumidores legados.
 
 ### Parâmetros
 
 - `query` (string, opcional): texto procurado nas linhas do arquivo. Se informado, é o valor principal usado na busca.
 - `node_type` (string, opcional): fallback usado quando `query` não for informado.
 - `filePath` (string, opcional): caminho de arquivo a ser lido primeiro. Quando presente, deve apontar para um arquivo existente.
+- `strictFilePath` (boolean, opcional): quando `true`, a busca fica estritamente limitada a `filePath` e não faz fallback para outros arquivos.
 - `limit` (number, opcional): quantidade máxima de ocorrências retornadas. Valor padrão: `20`. Deve ser maior que `0`.
 
 Regra de validação mínima:
 
 - É obrigatório informar `query` ou `node_type`.
 - `query`, `node_type` e `filePath` precisam ser strings quando fornecidos.
+- `strictFilePath` precisa ser boolean quando fornecido.
+- `strictFilePath=true` exige `filePath` válido.
 - `filePath` inválido ou diretório retorna erro.
 
 ### Retorno
@@ -206,6 +209,13 @@ O resultado MCP é devolvido como texto contendo JSON com o formato abaixo:
   "totalMatches": 1,
   "matches": [
     {
+      "filePath": "C:\\repo\\query-target.pas",
+      "startLine": 1,
+      "startColumn": 1,
+      "endLine": 1,
+      "endColumn": 35,
+      "nodeType": "procedure_declaration",
+      "preview": "procedure UniqueProcedureDeclarationToken;",
       "file": "C:\\repo\\query-target.pas",
       "line": 1,
       "text": "procedure UniqueProcedureDeclarationToken;"
@@ -218,7 +228,8 @@ Campos atuais:
 
 - `query`: valor efetivamente usado na busca, após trim e fallback para `node_type` quando necessário.
 - `totalMatches`: quantidade retornada no payload atual.
-- `matches`: lista de objetos com `file`, `line` e `text`.
+- `matches`: lista de objetos com campos estruturados (`filePath`, `startLine`, `startColumn`, `endLine`, `endColumn`, `nodeType`, `preview`).
+- `file`, `line`, `text`: campos legados mantidos por compatibilidade retroativa.
 
 ### Exemplos
 
@@ -242,6 +253,7 @@ Busca priorizando um arquivo específico:
   "arguments": {
     "query": "UniqueProcedureDeclarationToken",
     "filePath": "C:\\repo\\query-target.pas",
+    "strictFilePath": true,
     "limit": 5
   }
 }
@@ -262,9 +274,9 @@ Busca usando `node_type` como fallback quando `query` não é enviado:
 ### Limitações atuais
 
 - Ainda não executa query tree-sitter real.
-- Ainda não retorna `range`, capturas, `nodeType`, score ou contexto estrutural.
-- `filePath` hoje prioriza a leitura do arquivo informado, mas não limita sozinho a busca a esse arquivo; há fallback para candidatos internos adicionais.
-- O resultado é textual e determinístico, útil como baseline de contrato, não como busca estrutural SOTA.
+- `nodeType` atual é inferido de forma textual (heurística), sem parser estrutural completo.
+- Ainda não retorna capturas tree-sitter, score semântico e contexto de AST completo.
+- O resultado v2 é textual-estruturado e determinístico, útil como baseline de contrato, não como busca estrutural SOTA.
 
 ### Próximos passos para a versão SOTA
 

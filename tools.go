@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -86,12 +89,50 @@ func parseOptionalPositiveIntegerArgument(raw any, defaultValue int, argName str
 	return value, nil
 }
 
-func runQueryCandidates(filePath string) ([]string, error) {
+func collectWorkspaceDelphiCandidates(root string) ([]string, error) {
+	collected := make([]string, 0)
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+
+		if d.IsDir() {
+			name := strings.ToLower(d.Name())
+			switch name {
+			case ".git", "node_modules", "target", ".idea", ".vscode":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		switch ext {
+		case ".pas", ".dpr", ".dpk":
+			collected = append(collected, filepath.Clean(path))
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(collected)
+	return collected, nil
+}
+
+func runQueryCandidates(filePath string, strictFilePath bool) ([]string, error) {
 	baseCandidates := []string{"internal/tools/query_builder.go", "tools.go"}
 	seen := make(map[string]struct{}, len(baseCandidates)+1)
 	candidates := make([]string, 0, len(baseCandidates)+1)
+	trimmed := strings.TrimSpace(filePath)
 
-	if trimmed := strings.TrimSpace(filePath); trimmed != "" {
+	if strictFilePath && trimmed == "" {
+		return nil, fmt.Errorf("strictFilePath=true requires filePath")
+	}
+
+	if trimmed != "" {
 		cleaned := filepath.Clean(trimmed)
 		info, err := os.Stat(cleaned)
 		if err != nil {
@@ -102,6 +143,21 @@ func runQueryCandidates(filePath string) ([]string, error) {
 		}
 		seen[cleaned] = struct{}{}
 		candidates = append(candidates, cleaned)
+
+		if strictFilePath {
+			return candidates, nil
+		}
+	}
+
+	workspaceCandidates, err := collectWorkspaceDelphiCandidates(".")
+	if err == nil {
+		for _, candidate := range workspaceCandidates {
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
 	}
 
 	for _, candidate := range baseCandidates {
@@ -116,11 +172,43 @@ func runQueryCandidates(filePath string) ([]string, error) {
 	return candidates, nil
 }
 
-func runQueryTextScan(query string, nodeType string, filePath string, limit int) (string, error) {
+func inferRunQueryNodeType(line string) string {
+	lower := strings.ToLower(strings.TrimSpace(line))
+
+	switch {
+	case strings.HasPrefix(lower, "procedure "):
+		return "procedure"
+	case strings.HasPrefix(lower, "function "):
+		return "function"
+	case strings.HasPrefix(lower, "unit "):
+		return "unit"
+	case strings.HasPrefix(lower, "uses "):
+		return "uses"
+	case strings.HasPrefix(lower, "var ") || lower == "var":
+		return "var"
+	case strings.HasPrefix(lower, "const ") || lower == "const":
+		return "const"
+	case strings.HasPrefix(lower, "type ") || lower == "type":
+		return "type"
+	case strings.Contains(lower, "class"):
+		return "class"
+	default:
+		return "unknown"
+	}
+}
+
+func runQueryTextScan(query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	type runQueryMatch struct {
-		File string `json:"file"`
-		Line int    `json:"line"`
-		Text string `json:"text"`
+		FilePath    string `json:"filePath"`
+		StartLine   int    `json:"startLine"`
+		StartColumn int    `json:"startColumn"`
+		EndLine     int    `json:"endLine"`
+		EndColumn   int    `json:"endColumn"`
+		NodeType    string `json:"nodeType"`
+		Preview     string `json:"preview"`
+		File        string `json:"file"`
+		Line        int    `json:"line"`
+		Text        string `json:"text"`
 	}
 
 	type runQueryResponse struct {
@@ -134,7 +222,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, limit int)
 		needle = strings.TrimSpace(nodeType)
 	}
 
-	fileCandidates, err := runQueryCandidates(filePath)
+	fileCandidates, err := runQueryCandidates(filePath, strictFilePath)
 	if err != nil {
 		return "", err
 	}
@@ -165,11 +253,35 @@ func runQueryTextScan(query string, nodeType string, filePath string, limit int)
 				continue
 			}
 
-			if strings.Contains(strings.ToLower(line), needleLower) {
+			lowerRaw := strings.ToLower(rawLine)
+			if strings.Contains(lowerRaw, needleLower) {
+				byteOffset := strings.Index(lowerRaw, needleLower)
+				if byteOffset < 0 {
+					continue
+				}
+
+				startColumn := utf8.RuneCountInString(rawLine[:byteOffset]) + 1
+				matchWidth := utf8.RuneCountInString(needle)
+				if byteOffset+len(needle) <= len(rawLine) {
+					matchedSlice := rawLine[byteOffset : byteOffset+len(needle)]
+					matchWidth = utf8.RuneCountInString(matchedSlice)
+				}
+				if matchWidth < 1 {
+					matchWidth = 1
+				}
+				endColumn := startColumn + matchWidth - 1
+
 				matches = append(matches, runQueryMatch{
-					File: candidate,
-					Line: index + 1,
-					Text: line,
+					FilePath:    candidate,
+					StartLine:   index + 1,
+					StartColumn: startColumn,
+					EndLine:     index + 1,
+					EndColumn:   endColumn,
+					NodeType:    inferRunQueryNodeType(rawLine),
+					Preview:     line,
+					File:        candidate,
+					Line:        index + 1,
+					Text:        line,
 				})
 			}
 		}
@@ -1427,6 +1539,9 @@ func (s *mcpServer) registerTools() error {
 			mcp.WithString("filePath",
 				mcp.Description("Optional file path to scan first. Must point to an existing file when provided."),
 			),
+			mcp.WithBoolean("strictFilePath",
+				mcp.Description("When true, requires filePath and scans only that file with no fallback."),
+			),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of matches to return. Must be > 0."),
 			),
@@ -1463,12 +1578,25 @@ func (s *mcpServer) registerTools() error {
 				filePath = value
 			}
 
+			strictFilePath := false
+			if raw, exists := req.Params.Arguments["strictFilePath"]; exists && raw != nil {
+				value, ok := raw.(bool)
+				if !ok {
+					return mcp.NewToolResultError("strictFilePath must be a boolean"), nil
+				}
+				strictFilePath = value
+			}
+
+			if strictFilePath && strings.TrimSpace(filePath) == "" {
+				return mcp.NewToolResultError("strictFilePath=true requires filePath"), nil
+			}
+
 			limit, err := parseOptionalPositiveIntegerArgument(req.Params.Arguments["limit"], 20, "limit")
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			result, err := runQueryTextScan(query, nodeType, filePath, limit)
+			result, err := runQueryTextScan(query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}

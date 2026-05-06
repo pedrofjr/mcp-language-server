@@ -1141,6 +1141,226 @@ func TestRegisterTools_RunQuery_ReturnsErrorWhenNoFilesCanBeRead(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_RunQuery_ScansWorkspaceDelphiFilesAndFindsTempToken(t *testing.T) {
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to capture working directory: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	targetPas := filepath.Join(tempDir, "workspace_target.pas")
+	const queryText = "UniqueWorkspaceDelphiToken_20260505"
+
+	if err := os.WriteFile(targetPas, []byte("unit WorkspaceTarget;\ninterface\nprocedure "+queryText+";\nimplementation\nend.\n"), 0o600); err != nil {
+		t.Fatalf("failed to write Delphi temp file for run_query workspace scan test: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, "workspace_target.dpr"), []byte("program WorkspaceTarget;\nbegin\nend.\n"), 0o600); err != nil {
+		t.Fatalf("failed to write Delphi .dpr temp file: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, "workspace_target.dpk"), []byte("package WorkspaceTarget;\nend.\n"), 0o600); err != nil {
+		t.Fatalf("failed to write Delphi .dpk temp file: %v", err)
+	}
+
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to change working directory for run_query workspace scan test: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("failed to restore working directory: %v", chdirErr)
+		}
+	})
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": queryText,
+				"limit": 5,
+			},
+		},
+		102,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query workspace scan to succeed when Delphi files exist, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query workspace scan to return matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query workspace scan to find token %q inside Delphi workspace files, got %v", queryText, shaped)
+	}
+}
+
+func TestRegisterTools_RunQuery_ReturnsStructuredMatchesWithRequiredFields(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "structured_target.pas")
+	const queryText = "UniqueStructuredToken_20260505"
+
+	if err := os.WriteFile(targetFile, []byte("unit StructuredTarget;\ninterface\nprocedure "+queryText+";\nimplementation\nend.\n"), 0o600); err != nil {
+		t.Fatalf("failed to write temp file for structured run_query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":    queryText,
+				"filePath": targetFile,
+				"limit":    5,
+			},
+		},
+		103,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query structured shape scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	if _, ok := shaped["query"]; !ok {
+		t.Fatalf("expected structured run_query payload to keep top-level query, got %v", shaped)
+	}
+	if _, ok := shaped["totalMatches"]; !ok {
+		t.Fatalf("expected structured run_query payload to keep top-level totalMatches, got %v", shaped)
+	}
+	matches, ok := shaped["matches"].([]any)
+	if !ok || len(matches) == 0 {
+		t.Fatalf("expected structured run_query payload to include non-empty matches array, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	requiredMatchFields := []string{"filePath", "startLine", "startColumn", "endLine", "endColumn", "nodeType", "preview"}
+	for _, field := range requiredMatchFields {
+		if _, ok := firstMatch[field]; !ok {
+			t.Fatalf("expected run_query match to include required field %q, got %v", field, firstMatch)
+		}
+	}
+}
+
+func TestRegisterTools_RunQuery_StrictFilePathTrue_DoesNotFallbackToOtherFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	strictFile := filepath.Join(tempDir, "strict_target.pas")
+	if err := os.WriteFile(strictFile, []byte("unit StrictTarget;\ninterface\nimplementation\nend.\n"), 0o600); err != nil {
+		t.Fatalf("failed to write strict target file: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "runQueryTextScan",
+				"filePath":       strictFile,
+				"strictFilePath": true,
+				"limit":          10,
+			},
+		},
+		104,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected strict filePath run_query scenario to succeed with zero matches, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	totalMatches, ok := shaped["totalMatches"].(float64)
+	if !ok {
+		t.Fatalf("expected strict run_query payload to include numeric totalMatches, got %v", shaped)
+	}
+	if int(totalMatches) != 0 {
+		t.Fatalf("expected strictFilePath=true to avoid fallback and return 0 matches for %q, got totalMatches=%v payload=%v", strictFile, totalMatches, shaped)
+	}
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected strict run_query payload to include matches array, got %v", shaped)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected strictFilePath=true to return empty matches when target file has no query term, got %v", matches)
+	}
+}
+
+func TestRegisterTools_RunQuery_StrictFilePathTrue_WithoutFilePathReturnsValidationError(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "procedure",
+				"strictFilePath": true,
+				"limit":          5,
+			},
+		},
+		105,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal strict-without-filePath run_query result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode strict-without-filePath run_query result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query with strictFilePath=true and missing filePath to return tool error, got %s", string(resultBytes))
+	}
+
+	lowerPayload := strings.ToLower(string(resultBytes))
+	if !strings.Contains(lowerPayload, "strictfilepath") || !strings.Contains(lowerPayload, "filepath") {
+		t.Fatalf("expected strictFilePath validation error to mention strictFilePath and filePath requirement, got %s", string(resultBytes))
+	}
+}
+
 func decodeRunQueryCallResult(t *testing.T, result any, dest *map[string]any) {
 	t.Helper()
 
