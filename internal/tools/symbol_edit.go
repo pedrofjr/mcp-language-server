@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/isaacphi/mcp-language-server/internal/lsp"
+	"github.com/isaacphi/mcp-language-server/internal/protocol"
 )
 
 const (
@@ -14,6 +17,16 @@ const (
 	toolInsertAfterSymbol  = "insert_after_symbol"
 	toolInsertBeforeSymbol = "insert_before_symbol"
 )
+
+var applySymbolBodyTextEdits = ApplyTextEdits
+
+var writeSymbolFileForRollback = os.WriteFile
+
+// resolveSymbolReferencesForDelete é o hook para resolução semântica de referências
+// durante SafeDeleteSymbol. Pode ser substituído em testes.
+var resolveSymbolReferencesForDelete = func(ctx context.Context, client *lsp.Client, filePath, symbolName string) ([]protocol.Location, error) {
+	return resolveReferenceSymbolLocations(ctx, client, symbolName)
+}
 
 type symbolBodyRange struct {
 	beginLine int // 1-indexed, line with "begin"
@@ -63,6 +76,35 @@ func findSymbolBodyRange(src, symbolName string) *symbolBodyRange {
 	return nil
 }
 
+// findSymbolInnerBodyRange retorna o intervalo interno (linhas entre begin e end)
+// de uma rotina Delphi. Retorna nil quando o simbolo nao existe ou o bloco externo
+// nao e valido para derivar um intervalo interno seguro.
+func findSymbolInnerBodyRange(src, symbolName string) *symbolBodyRange {
+	r := findSymbolBodyRange(src, symbolName)
+	if r == nil {
+		return nil
+	}
+
+	innerBegin := r.beginLine + 1
+	innerEnd := r.endLine - 1
+	if innerBegin < 1 || innerEnd < 1 {
+		return nil
+	}
+
+	// Evita retornar range invertido para blocos vazios.
+	if innerBegin > innerEnd {
+		return nil
+	}
+
+	lines := strings.Split(src, "\n")
+	if innerBegin > len(lines) || innerEnd > len(lines) {
+		return nil
+	}
+
+	// O intervalo interno segue o mesmo contrato 1-indexed usado por TextEdit.
+	return &symbolBodyRange{beginLine: innerBegin, endLine: innerEnd}
+}
+
 // findSymbolStartLine retorna a linha (1-indexed) onde a rotina é declarada.
 // Retorna -1 se não encontrar.
 func findSymbolStartLine(src, symbolName string) int {
@@ -109,7 +151,7 @@ func ReplaceSymbolBody(ctx context.Context, client *lsp.Client, filePath, symbol
 		return "", fmt.Errorf("could not read file: %v", err)
 	}
 
-	r := findSymbolBodyRange(content, symbolName)
+	r := findSymbolInnerBodyRange(content, symbolName)
 	if r == nil {
 		return "", fmt.Errorf("symbol %q not found or has no begin..end block", symbolName)
 	}
@@ -119,7 +161,34 @@ func ReplaceSymbolBody(ctx context.Context, client *lsp.Client, filePath, symbol
 		EndLine:   r.endLine,
 		NewText:   newBody,
 	}
-	return ApplyTextEdits(ctx, client, normalizedPath, []TextEdit{edit})
+	return applySymbolEditWithRollback(
+		ctx,
+		client,
+		normalizedPath,
+		[]TextEdit{edit},
+		content,
+		applySymbolBodyTextEdits,
+	)
+}
+
+func applySymbolEditWithRollback(
+	ctx context.Context,
+	client *lsp.Client,
+	filePath string,
+	edits []TextEdit,
+	originalContent string,
+	applyFn func(context.Context, *lsp.Client, string, []TextEdit) (string, error),
+) (string, error) {
+	result, applyErr := applyFn(ctx, client, filePath, edits)
+	if applyErr == nil {
+		return result, nil
+	}
+
+	if rollbackErr := writeSymbolFileForRollback(filePath, []byte(originalContent), 0o644); rollbackErr != nil {
+		return "", fmt.Errorf("failed to apply symbol edit: %v; failed to rollback original content: %v", applyErr, rollbackErr)
+	}
+
+	return "", fmt.Errorf("failed to apply symbol edit: %v", applyErr)
 }
 
 // InsertAfterSymbol insere texto logo após a linha "end;" do símbolo.
@@ -149,7 +218,14 @@ func InsertAfterSymbol(ctx context.Context, client *lsp.Client, filePath, symbol
 		EndLine:   insertAt,
 		NewText:   text + "\n",
 	}
-	return ApplyTextEdits(ctx, client, normalizedPath, []TextEdit{edit})
+	return applySymbolEditWithRollback(
+		ctx,
+		client,
+		normalizedPath,
+		[]TextEdit{edit},
+		content,
+		applySymbolBodyTextEdits,
+	)
 }
 
 // InsertBeforeSymbol insere texto logo antes da linha de declaração do símbolo.
@@ -174,7 +250,14 @@ func InsertBeforeSymbol(ctx context.Context, client *lsp.Client, filePath, symbo
 		EndLine:   startLine,
 		NewText:   text + "\n" + symbolLineAt(content, startLine),
 	}
-	return ApplyTextEdits(ctx, client, normalizedPath, []TextEdit{edit})
+	return applySymbolEditWithRollback(
+		ctx,
+		client,
+		normalizedPath,
+		[]TextEdit{edit},
+		content,
+		applySymbolBodyTextEdits,
+	)
 }
 
 // readSymbolFileContent lê o conteúdo de um arquivo local.
@@ -192,6 +275,55 @@ func symbolLineAt(src string, line int) string {
 		return ""
 	}
 	return lines[line-1]
+}
+
+func isDelphiWorkspaceFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".pas" || ext == ".dpr" || ext == ".dpk"
+}
+
+func normalizedScanPath(path string) string {
+	cleaned := filepath.Clean(path)
+	cleaned = strings.ReplaceAll(cleaned, "\\", "/")
+	return strings.ToLower(cleaned)
+}
+
+func countCrossFileTextReferences(workspaceRoot, targetFilePath, symbolToken string) (int, error) {
+	target := normalizedScanPath(targetFilePath)
+	lowerToken := strings.ToLower(symbolToken)
+	count := 0
+
+	err := filepath.WalkDir(workspaceRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !isDelphiWorkspaceFile(path) {
+			return nil
+		}
+		if normalizedScanPath(path) == target {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(strings.ToLower(line), lowerToken) {
+				count++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
 }
 
 // SafeDeleteSymbol remove um simbolo se nao tiver referencias externas (ou forcadamente).
@@ -231,6 +363,39 @@ func SafeDeleteSymbol(ctx context.Context, client *lsp.Client, filePath, symbolN
 		if count > 0 {
 			return "", fmt.Errorf("simbolo %q tem %d referencias no arquivo. Use force=true para forcar a remocao", symbolName, count)
 		}
+
+		if client != nil {
+			locs, semErr := resolveSymbolReferencesForDelete(ctx, client, normalizedPath, symbolName)
+			if semErr == nil {
+				targetNorm := normalizedScanPath(normalizedPath)
+				crossCount := 0
+				for _, loc := range locs {
+					parsedURI, parseErr := protocol.ParseDocumentUri(string(loc.URI))
+					if parseErr != nil {
+						continue
+					}
+					locPath, pathErr := safeDocumentURIPath(parsedURI)
+					if pathErr != nil {
+						continue
+					}
+					if normalizedScanPath(locPath) != targetNorm {
+						crossCount++
+					}
+				}
+				if crossCount > 0 {
+					return "", fmt.Errorf("simbolo %q tem %d referencias cross-file semanticas. Use force=true para forcar a remocao", symbolName, crossCount)
+				}
+			}
+		} else {
+			workspaceRoot := filepath.Dir(normalizedPath)
+			crossFileCount, err := countCrossFileTextReferences(workspaceRoot, normalizedPath, lowerSymbol)
+			if err != nil {
+				return "", fmt.Errorf("erro ao buscar referencias cross-file no workspace local: %v", err)
+			}
+			if crossFileCount > 0 {
+				return "", fmt.Errorf("simbolo %q tem %d referencias em outros arquivos do workspace local. Use force=true para forcar a remocao", symbolName, crossFileCount)
+			}
+		}
 	}
 
 	r := findSymbolBodyRange(content, symbolName)
@@ -241,5 +406,12 @@ func SafeDeleteSymbol(ctx context.Context, client *lsp.Client, filePath, symbolN
 		edit = TextEdit{StartLine: startLine, EndLine: startLine, NewText: ""}
 	}
 
-	return ApplyTextEdits(ctx, client, normalizedPath, []TextEdit{edit})
+	return applySymbolEditWithRollback(
+		ctx,
+		client,
+		normalizedPath,
+		[]TextEdit{edit},
+		content,
+		applySymbolBodyTextEdits,
+	)
 }

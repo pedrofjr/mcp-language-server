@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -223,6 +224,277 @@ func nodeTypeKeywordPrefix(nodeType string) string {
 	return prefixes[nodeType]
 }
 
+func isRoutineDeclarationNodeType(nodeType string) bool {
+	switch nodeType {
+	case "procedure_declaration",
+		"function_declaration",
+		"constructor_declaration",
+		"destructor_declaration",
+		"class_procedure_declaration",
+		"class_function_declaration":
+		return true
+	default:
+		return false
+	}
+}
+
+func isModuleDeclarationNodeType(nodeType string) bool {
+	switch nodeType {
+	case "unit_declaration", "program_declaration", "library_declaration":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractRoutineSymbolNameFromDeclarationText(nodeText string) string {
+	trimmed := strings.TrimSpace(nodeText)
+	if trimmed == "" {
+		return ""
+	}
+
+	type routinePrefix struct {
+		lowerPrefix string
+		rawPrefix   string
+	}
+
+	prefixes := []routinePrefix{
+		{lowerPrefix: "class procedure", rawPrefix: "class procedure"},
+		{lowerPrefix: "class function", rawPrefix: "class function"},
+		{lowerPrefix: "procedure", rawPrefix: "procedure"},
+		{lowerPrefix: "function", rawPrefix: "function"},
+		{lowerPrefix: "constructor", rawPrefix: "constructor"},
+		{lowerPrefix: "destructor", rawPrefix: "destructor"},
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(lower, prefix.lowerPrefix) {
+			continue
+		}
+
+		remainder := strings.TrimSpace(trimmed[len(prefix.rawPrefix):])
+		if remainder == "" {
+			return ""
+		}
+
+		nameEnd := 0
+		for nameEnd < len(remainder) {
+			char := remainder[nameEnd]
+			isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+			isDigit := char >= '0' && char <= '9'
+			if isLetter || isDigit || char == '_' || char == '.' {
+				nameEnd++
+				continue
+			}
+			break
+		}
+
+		if nameEnd == 0 {
+			return ""
+		}
+
+		symbolName := strings.Trim(remainder[:nameEnd], ".")
+		if symbolName == "" {
+			return ""
+		}
+
+		first := symbolName[0]
+		firstIsLetter := (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+		if !firstIsLetter && first != '_' {
+			return ""
+		}
+
+		if strings.EqualFold(symbolName, "operator") {
+			return ""
+		}
+
+		return symbolName
+	}
+
+	return ""
+}
+
+func trimLeadingBOMAndWhitespace(text string) string {
+	trimmed := strings.TrimLeftFunc(text, unicode.IsSpace)
+	trimmed = strings.TrimPrefix(trimmed, "\ufeff")
+	return strings.TrimLeftFunc(trimmed, unicode.IsSpace)
+}
+
+func extractModuleSymbolNameFromDeclarationText(nodeType string, nodeText string) string {
+	if !isModuleDeclarationNodeType(nodeType) {
+		return ""
+	}
+
+	trimmed := trimLeadingBOMAndWhitespace(nodeText)
+	if trimmed == "" {
+		return ""
+	}
+
+	keywordByNodeType := map[string]string{
+		"unit_declaration":    "unit",
+		"program_declaration": "program",
+		"library_declaration": "library",
+	}
+
+	keyword := keywordByNodeType[nodeType]
+	if keyword == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, keyword) {
+		return ""
+	}
+
+	remainder := trimmed[len(keyword):]
+	if remainder == "" {
+		return ""
+	}
+
+	if !unicode.IsSpace([]rune(remainder)[0]) {
+		return ""
+	}
+
+	remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
+	if remainder == "" {
+		return ""
+	}
+
+	nameEnd := 0
+	for nameEnd < len(remainder) {
+		char := remainder[nameEnd]
+		isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+		isDigit := char >= '0' && char <= '9'
+		if isLetter || isDigit || char == '_' || char == '.' {
+			nameEnd++
+			continue
+		}
+		break
+	}
+
+	if nameEnd == 0 {
+		return ""
+	}
+
+	symbolName := strings.Trim(remainder[:nameEnd], ".")
+	if symbolName == "" {
+		return ""
+	}
+
+	first := symbolName[0]
+	firstIsLetter := (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+	if !firstIsLetter && first != '_' {
+		return ""
+	}
+
+	trailer := strings.TrimLeftFunc(remainder[nameEnd:], unicode.IsSpace)
+	if trailer == "" || trailer[0] != ';' {
+		return ""
+	}
+
+	return symbolName
+}
+
+func extractDpkPackageSymbolNameFromErrorNode(filePath string, nodeType string, nodeText string) string {
+	if !strings.EqualFold(nodeType, "ERROR") {
+		return ""
+	}
+
+	if !strings.EqualFold(filepath.Ext(filePath), ".dpk") {
+		return ""
+	}
+
+	trimmed := trimLeadingBOMAndWhitespace(nodeText)
+	if trimmed == "" {
+		return ""
+	}
+
+	const keyword = "package"
+	if len(trimmed) < len(keyword) || !strings.EqualFold(trimmed[:len(keyword)], keyword) {
+		return ""
+	}
+
+	remainder := trimmed[len(keyword):]
+	if remainder == "" {
+		return ""
+	}
+
+	if !unicode.IsSpace([]rune(remainder)[0]) {
+		return ""
+	}
+
+	remainder = strings.TrimLeftFunc(remainder, unicode.IsSpace)
+	if remainder == "" {
+		return ""
+	}
+
+	nameEnd := 0
+	for nameEnd < len(remainder) {
+		char := remainder[nameEnd]
+		isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+		isDigit := char >= '0' && char <= '9'
+		if isLetter || isDigit || char == '_' {
+			nameEnd++
+			continue
+		}
+		break
+	}
+
+	if nameEnd == 0 {
+		return ""
+	}
+
+	symbolName := remainder[:nameEnd]
+	first := symbolName[0]
+	firstIsLetter := (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
+	if !firstIsLetter && first != '_' {
+		return ""
+	}
+
+	trailer := strings.TrimLeftFunc(remainder[nameEnd:], unicode.IsSpace)
+	if trailer == "" || trailer[0] != ';' {
+		return ""
+	}
+
+	return symbolName
+}
+
+func extractDeclarationSymbolName(filePath string, nodeType string, nodeText string) string {
+	if isRoutineDeclarationNodeType(nodeType) {
+		return extractRoutineSymbolNameFromDeclarationText(nodeText)
+	}
+
+	if isModuleDeclarationNodeType(nodeType) {
+		return extractModuleSymbolNameFromDeclarationText(nodeType, nodeText)
+	}
+
+	if symbolName := extractDpkPackageSymbolNameFromErrorNode(filePath, nodeType, nodeText); symbolName != "" {
+		return symbolName
+	}
+
+	return ""
+}
+
+func isImplicitRunQueryNodeTypeCandidate(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false
+	}
+
+	for _, char := range trimmed {
+		if char >= 'a' && char <= 'z' {
+			continue
+		}
+		if char == '_' {
+			continue
+		}
+		return false
+	}
+
+	return true
+}
+
 func runQueryTextScan(query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	type runQueryMatch struct {
 		FilePath    string `json:"filePath"`
@@ -231,6 +503,8 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 		EndLine     int    `json:"endLine"`
 		EndColumn   int    `json:"endColumn"`
 		NodeType    string `json:"nodeType"`
+		CaptureName string `json:"captureName,omitempty"`
+			SymbolName  string `json:"symbolName,omitempty"`
 		Preview     string `json:"preview"`
 		File        string `json:"file"`
 		Line        int    `json:"line"`
@@ -244,10 +518,8 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 	}
 
 	needle := strings.TrimSpace(query)
-	if needle == "" {
-		needle = strings.TrimSpace(nodeType)
-	}
 	needleLower := strings.ToLower(needle)
+	effectiveNeedleLower := needleLower
 
 	fileCandidates, err := runQueryCandidates(filePath, strictFilePath)
 	if err != nil {
@@ -261,7 +533,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 	parser := sitter.NewParser()
 	parser.SetLanguage(lang)
 
-	appendNodeMatch := func(candidate string, previewLines []string, treeContent []byte, node *sitter.Node, lineOffset int, minByte uint32, maxByte uint32) {
+	appendNodeMatch := func(candidate string, previewLines []string, treeContent []byte, node *sitter.Node, lineOffset int, minByte uint32, maxByte uint32, captureName string) {
 		if node == nil || len(matches) >= limit {
 			return
 		}
@@ -279,9 +551,11 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 		}
 
 		nodeText := node.Content(treeContent)
-		if needleLower != "" && !strings.Contains(strings.ToLower(nodeText), needleLower) {
+		if effectiveNeedleLower != "" && !strings.Contains(strings.ToLower(nodeText), effectiveNeedleLower) {
 			return
 		}
+
+		symbolName := extractDeclarationSymbolName(candidate, nodeTypeValue, nodeText)
 
 		startPoint := node.StartPoint()
 		endPoint := node.EndPoint()
@@ -308,6 +582,8 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 			EndLine:     endLine,
 			EndColumn:   endColumn,
 			NodeType:    nodeTypeValue,
+			CaptureName: captureName,
+			SymbolName:  symbolName,
 			Preview:     preview,
 			File:        candidate,
 			Line:        startLine,
@@ -317,13 +593,24 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 
 	trimmedNodeType := strings.TrimSpace(nodeType)
 	var queryNodeType *sitter.Query
-	if trimmedNodeType != "" {
-		pattern := fmt.Sprintf("(%s) @match", trimmedNodeType)
+	if trimmedNodeType == "" && isImplicitRunQueryNodeTypeCandidate(needle) {
+		pattern := fmt.Sprintf("(%s) @match", needle)
 		q, qErr := sitter.NewQuery([]byte(pattern), lang)
-		if qErr != nil {
-			return "", fmt.Errorf("invalid node_type %q: tree-sitter query error: %w", nodeType, qErr)
+		if qErr == nil {
+			trimmedNodeType = needle
+			queryNodeType = q
+			effectiveNeedleLower = ""
 		}
-		queryNodeType = q
+	}
+	if trimmedNodeType != "" {
+		if queryNodeType == nil {
+			pattern := fmt.Sprintf("(%s) @match", trimmedNodeType)
+			q, qErr := sitter.NewQuery([]byte(pattern), lang)
+			if qErr != nil {
+				return "", fmt.Errorf("invalid node_type %q: tree-sitter query error: %w", nodeType, qErr)
+			}
+			queryNodeType = q
+		}
 		defer queryNodeType.Close()
 	}
 
@@ -366,7 +653,8 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 						if len(matches) >= limit {
 							break
 						}
-						appendNodeMatch(candidate, previewLines, treeContent, capture.Node, lineOffset, minByte, maxByte)
+						captureName := queryNodeType.CaptureNameForId(capture.Index)
+						appendNodeMatch(candidate, previewLines, treeContent, capture.Node, lineOffset, minByte, maxByte, captureName)
 					}
 				}
 				cursor.Close()
@@ -386,7 +674,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 					}
 
 					if node.Type() == trimmedNodeType {
-						appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte)
+						appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte, "")
 					}
 
 					for idx := int(node.ChildCount()) - 1; idx >= 0; idx-- {
@@ -410,7 +698,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 				}
 
 				if node.IsNamed() {
-					appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte)
+					appendNodeMatch(candidate, previewLines, treeContent, node, lineOffset, minByte, maxByte, "")
 				}
 
 				for idx := int(node.ChildCount()) - 1; idx >= 0; idx-- {

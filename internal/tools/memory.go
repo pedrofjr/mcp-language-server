@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,12 +100,23 @@ func saveMemory(entries map[string]MemoryEntry) error {
 
 // MemoryWrite cria uma nova entrada de memoria e retorna o ID gerado.
 func MemoryWrite(title, content string, tags []string) (string, error) {
+	if strings.TrimSpace(title) == "" {
+		return "", fmt.Errorf("campo title e obrigatorio e nao pode ser vazio")
+	}
+
 	memoryMu.Lock()
 	defer memoryMu.Unlock()
 
 	entries, err := loadMemory()
 	if err != nil {
 		return "", err
+	}
+
+	normalizedTitle := strings.TrimSpace(title)
+	for _, existing := range entries {
+		if strings.EqualFold(strings.TrimSpace(existing.Title), normalizedTitle) {
+			return "", fmt.Errorf("title duplicado: ja existe uma entrada com o titulo %q neste escopo", existing.Title)
+		}
 	}
 
 	id := uuid.New().String()
@@ -131,6 +143,10 @@ func MemoryWrite(title, content string, tags []string) (string, error) {
 
 // MemoryRead retorna a entrada pelo ID.
 func MemoryRead(id string) (*MemoryEntry, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, fmt.Errorf("campo id e obrigatorio e nao pode ser vazio")
+	}
+
 	memoryMu.Lock()
 	defer memoryMu.Unlock()
 
@@ -179,6 +195,10 @@ func MemoryList(tag string) ([]*MemoryEntry, error) {
 
 // MemoryEdit atualiza o conteudo de uma entrada existente.
 func MemoryEdit(id, newContent string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("campo id e obrigatorio e nao pode ser vazio")
+	}
+
 	memoryMu.Lock()
 	defer memoryMu.Unlock()
 
@@ -201,6 +221,10 @@ func MemoryEdit(id, newContent string) error {
 
 // MemoryDelete remove uma entrada pelo ID.
 func MemoryDelete(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("campo id e obrigatorio e nao pode ser vazio")
+	}
+
 	memoryMu.Lock()
 	defer memoryMu.Unlock()
 

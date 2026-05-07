@@ -1361,6 +1361,188 @@ func TestRegisterTools_RunQuery_StrictFilePathTrue_WithoutFilePathReturnsValidat
 	}
 }
 
+func TestRegisterTools_RunQuery_DpkPackageIncludesSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "MyPackage.dpk")
+	dpkContent := "package MyPackage;\nrequires rtl;\ncontains Unit1 in 'Unit1.pas';\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(dpkContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .dpk for run_query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyPackage",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		111,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query for .dpk package query to succeed, got tool error payload=%s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	totalMatches, ok := shaped["totalMatches"].(float64)
+	if !ok {
+		t.Fatalf("expected run_query .dpk payload to include numeric totalMatches, got %v", shaped)
+	}
+	if int(totalMatches) < 1 {
+		shapedBytes, _ := json.Marshal(shaped)
+		t.Fatalf("expected run_query .dpk query to return at least 1 match, got totalMatches=%v payload=%s", totalMatches, string(shapedBytes))
+	}
+
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query .dpk payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		shapedBytes, _ := json.Marshal(shaped)
+		t.Fatalf("expected run_query .dpk payload to include at least one match entry, got payload=%s", string(shapedBytes))
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first run_query .dpk match to be object, got %T", matches[0])
+	}
+
+	symbolName, _ := firstMatch["symbolName"].(string)
+	if strings.TrimSpace(symbolName) == "" {
+		firstBytes, _ := json.Marshal(firstMatch)
+		t.Fatalf("expected first run_query .dpk match to include non-empty symbolName, got %s", string(firstBytes))
+	}
+	if !strings.Contains(symbolName, "MyPackage") {
+		firstBytes, _ := json.Marshal(firstMatch)
+		t.Fatalf("expected first run_query .dpk match symbolName to contain MyPackage, got symbolName=%q match=%s", symbolName, string(firstBytes))
+	}
+
+	nodeType, _ := firstMatch["nodeType"].(string)
+	if strings.EqualFold(nodeType, "ERROR") {
+		// Diagnostic only: current parser/query behavior may classify .dpk package declaration as ERROR node type.
+		t.Logf("diagnostic: run_query .dpk first match returned nodeType=%q while symbolName=%q", nodeType, symbolName)
+	}
+}
+
+func TestRegisterTools_RunQuery_PackageLikeErrorOutsideDpkDoesNotPopulateSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "MyPackage.pas")
+	pasContent := "package MyPackage;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas package-like file for run_query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyPackage",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		112,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		return
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query package-like .pas response to include matches array, got %v", shaped)
+	}
+
+	for i, m := range matches {
+		match, ok := m.(map[string]any)
+		if !ok {
+			t.Fatalf("expected run_query package-like .pas match to be object at index %d, got %T", i, m)
+		}
+		symbolName, _ := match["symbolName"].(string)
+		if strings.TrimSpace(symbolName) != "" {
+			matchBytes, _ := json.Marshal(match)
+			t.Fatalf("expected run_query package-like .pas to keep symbolName empty/absent, but matches[%d] has symbolName=%q match=%s", i, symbolName, string(matchBytes))
+		}
+	}
+}
+
+func TestRegisterTools_RunQuery_MalformedDpkPackageDoesNotPopulateSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "MyPackage.dpk")
+	dpkContent := "package MyPackage\nrequires rtl;\ncontains Unit1 in 'Unit1.pas';\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(dpkContent), 0o600); err != nil {
+		t.Fatalf("failed to write malformed temp .dpk for run_query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyPackage",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		113,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		return
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query malformed .dpk response to include matches array, got %v", shaped)
+	}
+
+	for i, m := range matches {
+		match, ok := m.(map[string]any)
+		if !ok {
+			t.Fatalf("expected run_query malformed .dpk match to be object at index %d, got %T", i, m)
+		}
+		symbolName, _ := match["symbolName"].(string)
+		if strings.TrimSpace(symbolName) != "" {
+			matchBytes, _ := json.Marshal(match)
+			t.Fatalf("expected run_query malformed .dpk to keep symbolName empty/absent, but matches[%d] has symbolName=%q match=%s", i, symbolName, string(matchBytes))
+		}
+	}
+}
+
 func decodeRunQueryCallResult(t *testing.T, result any, dest *map[string]any) {
 	t.Helper()
 
@@ -1465,6 +1647,358 @@ func TestRegisterTools_RunQuery_NodeTypeFiltersByStructuralNode(t *testing.T) {
 		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "(*") {
 			t.Fatalf("expected no match to originate from a comment line when node_type=procedure_declaration, but matches[%d] preview=%q looks like a comment", i, preview)
 		}
+	}
+}
+
+func TestRegisterTools_RunQuery_NodeTypeWithoutQueryUsesStructuralMatch(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "node_type_without_query_target.pas")
+	pasContent := "procedure AlphaProc;\nfunction BetaFunc: Integer;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for node_type without query test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"node_type":      "procedure_declaration",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		107,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query with node_type and no query to succeed via structural match, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query node_type without query response to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query with node_type=procedure_declaration and no query to return at least one structural match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first run_query structural match to be an object, got %T", matches[0])
+	}
+
+	nodeType, _ := firstMatch["nodeType"].(string)
+	if nodeType != "procedure_declaration" {
+		t.Fatalf("expected first structural match nodeType=%q, got %q (match=%v)", "procedure_declaration", nodeType, firstMatch)
+	}
+
+	requiredFields := []string{"filePath", "startLine", "startColumn", "endLine", "endColumn", "nodeType", "preview", "file", "line", "text"}
+	for _, field := range requiredFields {
+		value, exists := firstMatch[field]
+		if !exists {
+			t.Fatalf("expected first structural match to include required field %q, got %v", field, firstMatch)
+		}
+		if textValue, ok := value.(string); ok && strings.TrimSpace(textValue) == "" {
+			t.Fatalf("expected first structural match field %q to be non-empty, got %v", field, firstMatch)
+		}
+	}
+}
+
+func TestRegisterTools_RunQuery_QueryOnlyNodeTypeNameUsesImplicitStructuralMatch(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "query_only_node_type_target.pas")
+	pasContent := "procedure AlphaProc;\nfunction BetaFunc: Integer;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for implicit structural node_type test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "procedure_declaration",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		108,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query with query-only node_type name to succeed via implicit structural match, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query implicit structural match response to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query with query=procedure_declaration and no node_type to return at least one implicit structural match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first implicit structural run_query match to be an object, got %T", matches[0])
+	}
+
+	requiredFields := []string{"filePath", "startLine", "startColumn", "endLine", "endColumn", "nodeType", "preview", "file", "line", "text"}
+	for _, field := range requiredFields {
+		value, exists := firstMatch[field]
+		if !exists {
+			t.Fatalf("expected first implicit structural match to include required field %q, got %v", field, firstMatch)
+		}
+		if textValue, ok := value.(string); ok && strings.TrimSpace(textValue) == "" {
+			t.Fatalf("expected first implicit structural match field %q to be non-empty, got %v", field, firstMatch)
+		}
+	}
+
+	for i, m := range matches {
+		match, ok := m.(map[string]any)
+		if !ok {
+			t.Fatalf("matches[%d] is not an object: %T", i, m)
+		}
+		nodeType, _ := match["nodeType"].(string)
+		if nodeType != "procedure_declaration" {
+			t.Fatalf("expected all implicit structural run_query matches to have nodeType='procedure_declaration', but matches[%d] has nodeType=%q; full match=%v", i, nodeType, match)
+		}
+	}
+}
+
+func TestRegisterTools_RunQuery_QueryOnlyFreeTextStillUsesLegacyFallback(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "query_only_free_text_target.pas")
+	pasContent := "procedure AlphaProc;\nfunction BetaFunc: Integer;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for query-only free-text fallback test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "AlphaProc",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		109,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query with free-text query and no node_type to keep legacy fallback behavior, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query free-text fallback response to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query with query=AlphaProc and no node_type to keep returning textual matches, got %v", shaped)
+	}
+}
+
+func TestRegisterTools_RunQuery_LimitTruncatesReturnedMatches(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "limit_truncation_target.pas")
+	pasContent := "procedure AlphaOne;\nprocedure AlphaTwo;\nprocedure AlphaThree;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for run_query limit truncation test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "procedure_declaration",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+				"limit":          1,
+			},
+		},
+		110,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query limit truncation scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	totalMatches, ok := shaped["totalMatches"].(float64)
+	if !ok {
+		t.Fatalf("expected run_query limit truncation response to include numeric totalMatches, got %v", shaped)
+	}
+	if int(totalMatches) != 1 {
+		t.Fatalf("expected run_query limit=1 to truncate totalMatches to 1, got totalMatches=%v payload=%v", totalMatches, shaped)
+	}
+
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query limit truncation response to include matches array, got %v", shaped)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected run_query limit=1 to return exactly one match, got len(matches)=%d payload=%v", len(matches), shaped)
+	}
+}
+
+func TestRegisterTools_RunQuery_FreeTextFallbackPreservesStructuredAndLegacyShape(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "free_text_shape_target.pas")
+	pasContent := "procedure AlphaProc;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for run_query free-text shape test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "AlphaProc",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		111,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query free-text fallback shape scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query free-text fallback response to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query free-text fallback to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first free-text fallback run_query match to be an object, got %T", matches[0])
+	}
+
+	requiredFields := []string{"filePath", "startLine", "startColumn", "endLine", "endColumn", "nodeType", "preview", "file", "line", "text"}
+	for _, field := range requiredFields {
+		value, exists := firstMatch[field]
+		if !exists {
+			t.Fatalf("expected first free-text fallback match to include required field %q, got %v", field, firstMatch)
+		}
+		if textValue, ok := value.(string); ok && strings.TrimSpace(textValue) == "" {
+			t.Fatalf("expected first free-text fallback match field %q to be non-empty, got %v", field, firstMatch)
+		}
+	}
+}
+
+func TestRegisterTools_RunQuery_NodeTypeKeepsQueryAsAdditionalFilter(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "node_type_query_filter_target.pas")
+	pasContent := "procedure AlphaProc;\nfunction BetaFunc: Integer;\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for node_type additional filter test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "texto-inexistente",
+				"node_type":      "procedure_declaration",
+				"filePath":       targetFile,
+				"strictFilePath": true,
+			},
+		},
+		108,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query with node_type plus textual query filter to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	totalMatches, ok := shaped["totalMatches"].(float64)
+	if !ok {
+		t.Fatalf("expected run_query node_type additional filter response to include numeric totalMatches, got %v", shaped)
+	}
+	if totalMatches != 0 {
+		t.Fatalf("expected textual query to remain an additional filter when node_type is set, want totalMatches=0 got %v (payload=%v)", totalMatches, shaped)
+	}
+
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query node_type additional filter response to include matches array, got %v", shaped)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected run_query with node_type=procedure_declaration and query=texto-inexistente to return no matches, got %v", matches)
 	}
 }
 
@@ -1574,6 +2108,62 @@ func TestRegisterTools_RunQuery_NodeTypeIncludesCaptureName(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_RunQuery_FreeTextFallbackDoesNotPopulateCaptureName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "capture_name_freetext_target.pas")
+	if err := os.WriteFile(targetFile, []byte("procedure AlphaProc;\n"), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for free-text captureName metadata test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "AlphaProc",
+				"strictFilePath": true,
+				"filePath":       targetFile,
+			},
+		},
+		1081,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query free-text fallback captureName scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query free-text fallback payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query free-text fallback scenario to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	if _, exists := firstMatch["captureName"]; exists {
+		captureName, _ := firstMatch["captureName"].(string)
+		if strings.TrimSpace(captureName) != "" {
+			t.Fatalf("expected first run_query free-text fallback match to omit captureName (or keep it empty), got %v", firstMatch)
+		}
+	}
+}
+
 func TestRegisterTools_RunQuery_DeclarationIncludesSymbolName(t *testing.T) {
 	tempDir := t.TempDir()
 	targetFile := filepath.Join(tempDir, "symbol_name_target.pas")
@@ -1630,6 +2220,316 @@ func TestRegisterTools_RunQuery_DeclarationIncludesSymbolName(t *testing.T) {
 	}
 	if !strings.Contains(symbolName, "AlphaProc") {
 		t.Fatalf("expected first run_query declaration match symbolName to contain %q, got %q (match=%v)", "AlphaProc", symbolName, firstMatch)
+	}
+}
+
+func TestRegisterTools_RunQuery_UnitDeclarationIncludesSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "unit_declaration_symbol_name_target.pas")
+	pasContent := "unit MyUnit;\ninterface\nimplementation\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for unit declaration symbolName metadata test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyUnit",
+				"node_type":      "unit_declaration",
+				"strictFilePath": true,
+				"filePath":       targetFile,
+			},
+		},
+		111,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query unit declaration symbolName scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query unit declaration symbolName payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query unit declaration symbolName scenario to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	symbolName, _ := firstMatch["symbolName"].(string)
+	if strings.TrimSpace(symbolName) == "" {
+		t.Fatalf("expected first run_query unit declaration match to include non-empty symbolName metadata, got %v", firstMatch)
+	}
+	if !strings.Contains(symbolName, "MyUnit") {
+		t.Fatalf("expected first run_query unit declaration match symbolName to contain %q, got %q (match=%v)", "MyUnit", symbolName, firstMatch)
+	}
+}
+
+func TestRegisterTools_RunQuery_ProgramDeclarationIncludesSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "program_declaration_symbol_name_target.dpr")
+	programContent := "program MyProgram;\nbegin\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(programContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .dpr for program declaration symbolName metadata test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyProgram",
+				"node_type":      "program_declaration",
+				"strictFilePath": true,
+				"filePath":       targetFile,
+			},
+		},
+		112,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query program declaration symbolName scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query program declaration symbolName payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query program declaration symbolName scenario to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	symbolName, _ := firstMatch["symbolName"].(string)
+	if strings.TrimSpace(symbolName) == "" {
+		t.Fatalf("expected first run_query program declaration match to include non-empty symbolName metadata, got %v", firstMatch)
+	}
+	if !strings.Contains(symbolName, "MyProgram") {
+		t.Fatalf("expected first run_query program declaration match symbolName to contain %q, got %q (match=%v)", "MyProgram", symbolName, firstMatch)
+	}
+}
+
+func TestRegisterTools_RunQuery_LibraryDeclarationIncludesSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "library_declaration_symbol_name_target.dpr")
+	libraryContent := "library MyLibrary;\nbegin\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(libraryContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .dpr for library declaration symbolName metadata test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "MyLibrary",
+				"node_type":      "library_declaration",
+				"strictFilePath": true,
+				"filePath":       targetFile,
+			},
+		},
+		113,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query library declaration symbolName scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query library declaration symbolName payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query library declaration symbolName scenario to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	symbolName, _ := firstMatch["symbolName"].(string)
+	if strings.TrimSpace(symbolName) == "" {
+		t.Fatalf("expected first run_query library declaration match to include non-empty symbolName metadata, got %v", firstMatch)
+	}
+	if !strings.Contains(symbolName, "MyLibrary") {
+		t.Fatalf("expected first run_query library declaration match symbolName to contain %q, got %q (match=%v)", "MyLibrary", symbolName, firstMatch)
+	}
+}
+
+func TestRegisterTools_RunQuery_NonRoutineDeclarationDoesNotPopulateSymbolName(t *testing.T) {
+	tempDir := t.TempDir()
+	targetFile := filepath.Join(tempDir, "const_section_target.pas")
+	pasContent := "unit ConstScope;\ninterface\nconst\n  Foo = 1;\nimplementation\nend.\n"
+	if err := os.WriteFile(targetFile, []byte(pasContent), 0o600); err != nil {
+		t.Fatalf("failed to write temp .pas for non-routine symbolName metadata test: %v", err)
+	}
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query":          "Foo",
+				"node_type":      "const_section",
+				"strictFilePath": true,
+				"filePath":       targetFile,
+			},
+		},
+		110,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query non-routine declaration symbolName scenario to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok {
+		t.Fatalf("expected run_query non-routine declaration symbolName payload to include matches array, got %v", shaped)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected run_query non-routine declaration symbolName scenario to return at least one match, got %v", shaped)
+	}
+
+	firstMatch, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match to be an object, got %T", matches[0])
+	}
+
+	if _, exists := firstMatch["symbolName"]; exists {
+		symbolName, _ := firstMatch["symbolName"].(string)
+		if strings.TrimSpace(symbolName) != "" {
+			t.Fatalf("expected first run_query non-routine declaration match to omit symbolName (or keep it empty), got %v", firstMatch)
+		}
+	}
+}
+
+func TestRegisterTools_MemoryEdit_RejectsTitleOnlyArguments(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "memory_edit",
+			"arguments": map[string]any{
+				"title":   "Nota sem id",
+				"content": "novo conteudo qualquer",
+			},
+		},
+		101,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal memory_edit result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode memory_edit result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected memory_edit with title-only args (no id) to return a tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "id") {
+		t.Fatalf("expected memory_edit error to mention 'id', got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_MemoryRead_RejectsTitleOnlyArguments(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "memory_read",
+			"arguments": map[string]any{
+				"title": "Nota qualquer sem id",
+			},
+		},
+		102,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal memory_read result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode memory_read result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected memory_read with title-only args (no id) to return a tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "id") {
+		t.Fatalf("expected memory_read error to mention 'id', got %s", string(resultBytes))
 	}
 }
 
