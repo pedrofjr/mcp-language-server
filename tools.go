@@ -788,7 +788,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(applyTextEditTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(applyTextEditTool, withToolLogging("edit_file", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
@@ -840,7 +840,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to apply edits: %v", err)), nil
 		}
 		return mcp.NewToolResultText(response), nil
-	})
+	})))
 
 	readDefinitionTool := mcp.NewTool("definition",
 		mcp.WithDescription("Read the source code definition of a symbol (function, type, constant, etc.) from the codebase. symbolName can be unqualified, but package/type/unit-qualified names may be required or resolve more precisely depending on the language server."),
@@ -850,7 +850,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(readDefinitionTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(readDefinitionTool, withToolLogging("definition", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		symbolName, ok := request.Params.Arguments["symbolName"].(string)
 		if !ok {
@@ -864,7 +864,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get definition: %v", err)), nil
 		}
 		return mcp.NewToolResultText(text), nil
-	})
+	})))
 
 	findReferencesTool := mcp.NewTool("references",
 		mcp.WithDescription("Find all usages and references of a symbol throughout the codebase. symbolName can be unqualified, but package/type/unit-qualified names may be required or resolve more precisely depending on the language server."),
@@ -874,7 +874,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(findReferencesTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(findReferencesTool, withToolLogging("references", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		symbolName, ok := request.Params.Arguments["symbolName"].(string)
 		if !ok {
@@ -888,7 +888,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to find references: %v", err)), nil
 		}
 		return mcp.NewToolResultText(text), nil
-	})
+	})))
 
 	getDiagnosticsTool := mcp.NewTool("diagnostics",
 		mcp.WithDescription("Get diagnostic information for a specific file from the language server."),
@@ -906,7 +906,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(getDiagnosticsTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(getDiagnosticsTool, withToolLogging("diagnostics", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
@@ -923,10 +923,6 @@ func (s *mcpServer) registerTools() error {
 			showLineNumbers = showLineNumbersArg
 		}
 
-		if s.lspClient == nil {
-			return mcp.NewToolResultError("lspClient not initialized"), nil
-		}
-
 		coreLogger.Debug("Executing diagnostics for file: %s", filePath)
 		text, err := tools.GetDiagnosticsForFile(s.ctx, s.lspClient, filePath, contextLines, showLineNumbers)
 		if err != nil {
@@ -934,7 +930,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get diagnostics: %v", err)), nil
 		}
 		return mcp.NewToolResultText(text), nil
-	})
+	})))
 
 	// Uncomment to add codelens tools
 	//
@@ -1017,7 +1013,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(hoverTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(hoverTool, withToolLogging("hover", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
@@ -1051,7 +1047,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get hover information: %v", err)), nil
 		}
 		return mcp.NewToolResultText(text), nil
-	})
+	})))
 
 	renameSymbolTool := mcp.NewTool("rename_symbol",
 		mcp.WithDescription("Rename a symbol (variable, function, class, etc.) at the specified position and update all references throughout the codebase."),
@@ -1073,7 +1069,7 @@ func (s *mcpServer) registerTools() error {
 		),
 	)
 
-	s.mcpServer.AddTool(renameSymbolTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.mcpServer.AddTool(renameSymbolTool, withToolLogging("rename_symbol", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
@@ -1112,7 +1108,7 @@ func (s *mcpServer) registerTools() error {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to rename symbol: %v", err)), nil
 		}
 		return mcp.NewToolResultText(text), nil
-	})
+	})))
 
 	// workspace_symbols
 	s.mcpServer.AddTool(

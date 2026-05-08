@@ -14,6 +14,7 @@ import (
 
 	"github.com/isaacphi/mcp-language-server/internal/logging"
 	"github.com/isaacphi/mcp-language-server/internal/lsp"
+	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/isaacphi/mcp-language-server/internal/watcher"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -146,6 +147,13 @@ func expandCLIFlagSearchPaths(searchPaths []string) []string {
 	return expanded
 }
 
+// shouldStartAutoOnboarding verifica se o projeto ainda não foi através do onboarding
+// e retorna true se deveria executá-lo automaticamente.
+func shouldStartAutoOnboarding(projectPath string) bool {
+	performed, _ := tools.CheckOnboardingPerformed(projectPath)
+	return !performed
+}
+
 func newServer(config *config) (*mcpServer, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &mcpServer{
@@ -202,6 +210,20 @@ func (s *mcpServer) start() error {
 	if err != nil {
 		return fmt.Errorf("tool registration failed: %v", err)
 	}
+
+	// Iniciar auto-onboarding assincronamente se ainda nao foi feito
+	go func() {
+		time.Sleep(500 * time.Millisecond) // deixa requests iniciais passarem
+		if shouldStartAutoOnboarding(s.config.workspaceDir) {
+			coreLogger.Info("Starting automatic project onboarding...")
+			_, err := tools.PerformOnboarding(s.config.workspaceDir)
+			if err != nil {
+				coreLogger.Error("Automatic onboarding failed: %v", err)
+			} else {
+				coreLogger.Info("Automatic onboarding completed successfully")
+			}
+		}
+	}()
 
 	return server.ServeStdio(s.mcpServer)
 }
