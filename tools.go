@@ -2168,7 +2168,12 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		if !performed {
-			return mcp.NewToolResultText("Onboarding ainda nao foi executado para este projeto" + contextSuffix), nil
+			_, readinessGuidance := tools.EvaluateOnboardingReadiness(projectPath)
+			message := "Onboarding ainda nao foi executado para este projeto" + contextSuffix
+			if strings.TrimSpace(readinessGuidance) != "" {
+				message = message + ". " + readinessGuidance
+			}
+			return mcp.NewToolResultText(message), nil
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("Onboarding executado em: %s%s", at.Format(time.RFC3339), contextSuffix)), nil
 	})

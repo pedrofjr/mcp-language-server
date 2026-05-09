@@ -222,6 +222,74 @@ func TestRegisterTools_OnboardingTools_AcceptNullAndWhitespaceContextArgument(t 
 	}
 }
 
+func TestRegisterTools_CheckOnboardingPerformed_NotReadyActionableMessage(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	tmpProject := t.TempDir()
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "check_onboarding_performed",
+			"arguments": map[string]any{
+				"projectPath": tmpProject,
+			},
+		},
+		31,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal check_onboarding_performed result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode check_onboarding_performed result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected check_onboarding_performed not-ready path to return non-error MCP result (err=nil and isError=false), got %s", string(resultBytes))
+	}
+
+	contentRaw, ok := callResult["content"].([]any)
+	if !ok || len(contentRaw) == 0 {
+		t.Fatalf("expected check_onboarding_performed success payload to include content array, got %s", string(resultBytes))
+	}
+
+	firstContent, ok := contentRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first content entry to be an object, got %s", string(resultBytes))
+	}
+
+	message, _ := firstContent["text"].(string)
+	if message == "" {
+		t.Fatalf("expected check_onboarding_performed payload to include human-readable text, got %s", string(resultBytes))
+	}
+
+	legacyPrefix := "Onboarding ainda nao foi executado para este projeto"
+	if !strings.HasPrefix(message, legacyPrefix) {
+		t.Fatalf("expected message to preserve legacy prefix %q, got %q", legacyPrefix, message)
+	}
+
+	lowerMessage := strings.ToLower(message)
+	if !strings.Contains(lowerMessage, "onboarding") || !strings.Contains(lowerMessage, "novamente") {
+		t.Fatalf("expected actionable guidance with explicit next step (execute onboarding/check novamente), got %q", message)
+	}
+
+	if !strings.Contains(lowerMessage, "se nao houver") {
+		t.Fatalf("expected readiness hint in cautious language (e.g., 'se nao houver ...'), got %q", message)
+	}
+
+	if !strings.Contains(lowerMessage, ".pas") || !strings.Contains(lowerMessage, ".dpr") || !strings.Contains(lowerMessage, ".dpk") {
+		t.Fatalf("expected readiness hint to mention Delphi source extensions (.pas/.dpr/.dpk), got %q", message)
+	}
+}
+
 func TestRegisterTools_SemanticSearch_RegisteredAndValidatesParams(t *testing.T) {
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)

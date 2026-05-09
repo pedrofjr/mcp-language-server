@@ -146,6 +146,44 @@ func CheckOnboardingPerformedWithContext(projectPath, contextKey string) (bool, 
 	return false, time.Time{}
 }
 
+// EvaluateOnboardingReadiness avalia se o diretorio parece pronto para onboarding.
+func EvaluateOnboardingReadiness(projectPath string) (bool, string) {
+	info, err := os.Stat(projectPath)
+	if err != nil || !info.IsDir() {
+		return false, "Proximo passo: execute onboarding e rode check_onboarding_performed novamente. Se nao houver arquivos Delphi (.pas/.dpr/.dpk), o onboarding pode nao encontrar unidades."
+	}
+
+	hasDelphiSource := false
+	_ = filepath.Walk(projectPath, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info == nil || info.IsDir() {
+			return nil
+		}
+
+		lower := strings.ToLower(path)
+		if strings.HasSuffix(lower, ".pas") || strings.HasSuffix(lower, ".dpr") || strings.HasSuffix(lower, ".dpk") {
+			hasDelphiSource = true
+		}
+		return nil
+	})
+
+	if !hasDelphiSource {
+		return false, "Proximo passo: execute onboarding e rode check_onboarding_performed novamente. Se nao houver arquivos Delphi (.pas/.dpr/.dpk), o onboarding pode nao encontrar unidades."
+	}
+
+	return true, ""
+}
+
+func logOnboardingImpact(source, projectPath, contextKey string, performed bool, startedAt time.Time) {
+	toolsLogger.Info(
+		"onboarding_impact source=%s project_path=%s context=%s post_check_performed=%t duration_ms=%d",
+		source,
+		projectPath,
+		normalizeOnboardingContext(contextKey),
+		performed,
+		time.Since(startedAt).Milliseconds(),
+	)
+}
+
 // PerformOnboarding executa o onboarding e salva o registro.
 func PerformOnboarding(projectPath string) (string, error) {
 	return PerformOnboardingWithContext(projectPath, "")
@@ -153,12 +191,23 @@ func PerformOnboarding(projectPath string) (string, error) {
 
 // PerformOnboardingWithContext executa o onboarding e salva o registro por contexto.
 func PerformOnboardingWithContext(projectPath, contextKey string) (string, error) {
+	startedAt := time.Now()
+	normalizedContext := normalizeOnboardingContext(contextKey)
+	defer func() {
+		performed, _ := CheckOnboardingPerformedWithContext(projectPath, normalizedContext)
+		source := "manual"
+		if normalizedContext == defaultOnboardingContext {
+			source = "auto"
+		}
+		logOnboardingImpact(source, projectPath, normalizedContext, performed, startedAt)
+	}()
+
 	structure, err := ScanProjectStructure(projectPath)
 	if err != nil {
 		return "", err
 	}
 
-	contextKey = normalizeOnboardingContext(contextKey)
+	contextKey = normalizedContext
 
 	record, err := loadOnboardingRecord(projectPath)
 	if err != nil {
