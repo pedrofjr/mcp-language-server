@@ -517,7 +517,7 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 		EndColumn   int    `json:"endColumn"`
 		NodeType    string `json:"nodeType"`
 		CaptureName string `json:"captureName,omitempty"`
-			SymbolName  string `json:"symbolName,omitempty"`
+		SymbolName  string `json:"symbolName,omitempty"`
 		Preview     string `json:"preview"`
 		File        string `json:"file"`
 		Line        int    `json:"line"`
@@ -1140,6 +1140,30 @@ func (s *mcpServer) registerTools() error {
 			}
 			query, _ := queryRaw.(string)
 			result, err := tools.GetWorkspaceSymbols(s.ctx, s.lspClient, query)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+			}
+			return mcp.NewToolResultText(result), nil
+		},
+	)
+
+	// get_symbols_overview
+	s.mcpServer.AddTool(
+		mcp.NewTool("get_symbols_overview",
+			mcp.WithDescription("Aggregate workspace symbols by URI and return a compact JSON overview grouped per unit/file."),
+			mcp.WithString("query",
+				mcp.Description("Optional filter string forwarded to workspace/symbol. Whitespace-only values are trimmed to empty."),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			queryRaw := req.Params.Arguments["query"]
+			if queryRaw != nil {
+				if _, ok := queryRaw.(string); !ok {
+					return mcp.NewToolResultError("query must be a string"), nil
+				}
+			}
+			query, _ := queryRaw.(string)
+			result, err := tools.GetSymbolsOverview(s.ctx, s.lspClient, query)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}

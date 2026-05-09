@@ -118,6 +118,60 @@ func TestRegisterTools_WorkspaceSymbols_RemainsRegisteredAndCallable(t *testing.
 	}
 }
 
+func TestRegisterTools_GetSymbolsOverview_IsRegisteredAndRejectsNonStringQuery(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 4)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	toolSet := make(map[string]struct{}, len(listResult.Tools))
+	for _, tool := range listResult.Tools {
+		toolSet[tool.Name] = struct{}{}
+	}
+
+	if _, ok := toolSet["get_symbols_overview"]; !ok {
+		t.Fatal("expected get_symbols_overview to be explicitly registered in tools/list")
+	}
+
+	if _, ok := toolSet["workspace_symbols"]; !ok {
+		t.Fatal("expected workspace_symbols to remain registered alongside get_symbols_overview")
+	}
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "get_symbols_overview",
+			"arguments": map[string]any{
+				"query": 123,
+			},
+		},
+		5,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal call result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode call result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatal("expected get_symbols_overview with non-string query to return a tool error")
+	}
+
+	if !strings.Contains(string(resultBytes), "query must be a string") {
+		t.Fatalf("expected get_symbols_overview error message to mention invalid query type, got %s", string(resultBytes))
+	}
+}
+
 func TestRegisterTools_OnboardingTools_RejectNonStringContextArgument(t *testing.T) {
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)

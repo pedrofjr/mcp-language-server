@@ -175,6 +175,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `hover`: Display documentation, type hints, or other hover information for a given location.
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
+- `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols.
 - `run_query`: Executa o motor de consulta v2 com varredura Delphi no workspace, shape estruturado de matches e compatibilidade legada.
 
 ## run_query
