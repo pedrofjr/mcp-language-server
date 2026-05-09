@@ -178,6 +178,14 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols.
 - `run_query`: Executa o motor de consulta v2 com varredura Delphi no workspace, shape estruturado de matches e compatibilidade legada.
 
+## Fluxo inicial recomendado
+
+Para explorar um projeto de forma orientada:
+
+1. Rode `check_onboarding_performed`.
+2. Se ainda nao estiver pronto, rode `onboarding` e depois `check_onboarding_performed` novamente.
+3. Rode `get_symbols_overview` para obter um panorama inicial de unidades e simbolos.
+
 ## run_query
 
 Status atual: v2 entregue (baseline estável), ainda abaixo de SOTA estrutural.

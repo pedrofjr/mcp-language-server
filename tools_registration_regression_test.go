@@ -344,6 +344,209 @@ func TestRegisterTools_CheckOnboardingPerformed_NotReadyActionableMessage(t *tes
 	}
 }
 
+func TestRegisterTools_CheckOnboardingPerformed_PerformedSuggestsGetSymbolsOverview_DefaultContext(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	projectPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectPath, "Unit1.pas"), []byte("unit Unit1; interface implementation end."), 0o644); err != nil {
+		t.Fatalf("failed to create onboarding fixture: %v", err)
+	}
+
+	onboardingResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "onboarding",
+			"arguments": map[string]any{
+				"projectPath": projectPath,
+			},
+		},
+		401,
+	)
+
+	onboardingResultBytes, err := json.Marshal(onboardingResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal onboarding result: %v", err)
+	}
+
+	var onboardingResult map[string]any
+	if err := json.Unmarshal(onboardingResultBytes, &onboardingResult); err != nil {
+		t.Fatalf("failed to decode onboarding result map: %v", err)
+	}
+
+	onboardingError, _ := onboardingResult["isError"].(bool)
+	if onboardingError {
+		t.Fatalf("expected onboarding fixture call to succeed, got %s", string(onboardingResultBytes))
+	}
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "check_onboarding_performed",
+			"arguments": map[string]any{
+				"projectPath": projectPath,
+			},
+		},
+		402,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal check_onboarding_performed result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode check_onboarding_performed result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected check_onboarding_performed performed path to return success, got %s", string(resultBytes))
+	}
+
+	contentRaw, ok := callResult["content"].([]any)
+	if !ok || len(contentRaw) == 0 {
+		t.Fatalf("expected check_onboarding_performed payload to include content array, got %s", string(resultBytes))
+	}
+
+	firstContent, ok := contentRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first content entry to be an object, got %s", string(resultBytes))
+	}
+
+	message, _ := firstContent["text"].(string)
+	if message == "" {
+		t.Fatalf("expected check_onboarding_performed payload to include human-readable text, got %s", string(resultBytes))
+	}
+
+	legacyPrefix := "Onboarding executado em:"
+	if !strings.HasPrefix(message, legacyPrefix) {
+		t.Fatalf("expected performed message to preserve legacy prefix %q, got %q", legacyPrefix, message)
+	}
+
+	if !strings.Contains(strings.ToLower(message), "get_symbols_overview") {
+		t.Fatalf("expected performed message to suggest get_symbols_overview as next step, got %q", message)
+	}
+
+	if strings.Contains(strings.ToLower(message), "definition") {
+		t.Fatalf("expected performed message to avoid definition extrapolation, got %q", message)
+	}
+
+	if strings.Contains(strings.ToLower(message), "references") {
+		t.Fatalf("expected performed message to avoid references extrapolation, got %q", message)
+	}
+}
+
+func TestRegisterTools_CheckOnboardingPerformed_PerformedSuggestsGetSymbolsOverview_ExplicitContext(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	projectPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectPath, "Unit1.pas"), []byte("unit Unit1; interface implementation end."), 0o644); err != nil {
+		t.Fatalf("failed to create onboarding fixture: %v", err)
+	}
+
+	contextKey := "manual-flow"
+	onboardingResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "onboarding",
+			"arguments": map[string]any{
+				"projectPath": projectPath,
+				"context":     contextKey,
+			},
+		},
+		403,
+	)
+
+	onboardingResultBytes, err := json.Marshal(onboardingResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal onboarding result: %v", err)
+	}
+
+	var onboardingResult map[string]any
+	if err := json.Unmarshal(onboardingResultBytes, &onboardingResult); err != nil {
+		t.Fatalf("failed to decode onboarding result map: %v", err)
+	}
+
+	onboardingError, _ := onboardingResult["isError"].(bool)
+	if onboardingError {
+		t.Fatalf("expected onboarding fixture call to succeed, got %s", string(onboardingResultBytes))
+	}
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "check_onboarding_performed",
+			"arguments": map[string]any{
+				"projectPath": projectPath,
+				"context":     contextKey,
+			},
+		},
+		404,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal check_onboarding_performed result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode check_onboarding_performed result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected check_onboarding_performed performed path to return success, got %s", string(resultBytes))
+	}
+
+	contentRaw, ok := callResult["content"].([]any)
+	if !ok || len(contentRaw) == 0 {
+		t.Fatalf("expected check_onboarding_performed payload to include content array, got %s", string(resultBytes))
+	}
+
+	firstContent, ok := contentRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first content entry to be an object, got %s", string(resultBytes))
+	}
+
+	message, _ := firstContent["text"].(string)
+	if message == "" {
+		t.Fatalf("expected check_onboarding_performed payload to include human-readable text, got %s", string(resultBytes))
+	}
+
+	legacyPrefix := "Onboarding executado em:"
+	if !strings.HasPrefix(message, legacyPrefix) {
+		t.Fatalf("expected performed message to preserve legacy prefix %q, got %q", legacyPrefix, message)
+	}
+
+	if !strings.Contains(message, "(contexto: "+contextKey+")") {
+		t.Fatalf("expected explicit context suffix in performed message, got %q", message)
+	}
+
+	if !strings.Contains(strings.ToLower(message), "get_symbols_overview") {
+		t.Fatalf("expected performed message to suggest get_symbols_overview as next step, got %q", message)
+	}
+
+	if strings.Contains(strings.ToLower(message), "definition") {
+		t.Fatalf("expected performed message to avoid definition extrapolation, got %q", message)
+	}
+
+	if strings.Contains(strings.ToLower(message), "references") {
+		t.Fatalf("expected performed message to avoid references extrapolation, got %q", message)
+	}
+}
+
 func TestRegisterTools_SemanticSearch_RegisteredAndValidatesParams(t *testing.T) {
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)

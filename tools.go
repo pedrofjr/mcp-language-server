@@ -2199,7 +2199,9 @@ func (s *mcpServer) registerTools() error {
 			}
 			return mcp.NewToolResultText(message), nil
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Onboarding executado em: %s%s", at.Format(time.RFC3339), contextSuffix)), nil
+		performedMessage := fmt.Sprintf("Onboarding executado em: %s%s", at.Format(time.RFC3339), contextSuffix)
+		performedMessage += ". Proximo passo: execute get_symbols_overview para mapear unidades/simbolos."
+		return mcp.NewToolResultText(performedMessage), nil
 	})
 
 	coreLogger.Info("Successfully registered all MCP tools")
