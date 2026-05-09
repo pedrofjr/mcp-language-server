@@ -118,6 +118,110 @@ func TestRegisterTools_WorkspaceSymbols_RemainsRegisteredAndCallable(t *testing.
 	}
 }
 
+func TestRegisterTools_OnboardingTools_RejectNonStringContextArgument(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	tmpProject := t.TempDir()
+
+	cases := []struct {
+		toolName string
+		id       int
+	}{
+		{toolName: "onboarding", id: 25},
+		{toolName: "check_onboarding_performed", id: 26},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": tc.toolName,
+				"arguments": map[string]any{
+					"projectPath": tmpProject,
+					"context":     123,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.toolName, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.toolName, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected tool error for non-string context", tc.toolName)
+		}
+
+		if !strings.Contains(string(resultBytes), "context must be a string") {
+			t.Fatalf("%s: expected validation message for context type, got %s", tc.toolName, string(resultBytes))
+		}
+	}
+}
+
+func TestRegisterTools_OnboardingTools_AcceptNullAndWhitespaceContextArgument(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	tmpProject := t.TempDir()
+	err := os.WriteFile(filepath.Join(tmpProject, "Unit1.pas"), []byte("unit Unit1; interface implementation end."), 0o644)
+	if err != nil {
+		t.Fatalf("failed to create minimal Delphi fixture: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		tool    string
+		context any
+		id      int
+	}{
+		{name: "onboarding with null context", tool: "onboarding", context: nil, id: 27},
+		{name: "onboarding with whitespace context", tool: "onboarding", context: "   ", id: 28},
+		{name: "check_onboarding_performed with null context", tool: "check_onboarding_performed", context: nil, id: 29},
+		{name: "check_onboarding_performed with whitespace context", tool: "check_onboarding_performed", context: "\t  ", id: 30},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": tc.tool,
+				"arguments": map[string]any{
+					"projectPath": tmpProject,
+					"context":     tc.context,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, marshalErr := json.Marshal(callResp.Result)
+		if marshalErr != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.name, marshalErr)
+		}
+
+		var callResult map[string]any
+		if unmarshalErr := json.Unmarshal(resultBytes, &callResult); unmarshalErr != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.name, unmarshalErr)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if isError {
+			t.Fatalf("%s: expected success for null/whitespace context, got %s", tc.name, string(resultBytes))
+		}
+	}
+}
+
 func TestRegisterTools_SemanticSearch_RegisteredAndValidatesParams(t *testing.T) {
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)

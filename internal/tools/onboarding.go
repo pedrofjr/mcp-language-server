@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+const defaultOnboardingContext = "default"
+
+type onboardingContextRecord struct {
+	PerformedAt time.Time `json:"performed_at"`
+	UnitCount   int       `json:"unit_count,omitempty"`
+	EntryPoint  string    `json:"entry_point,omitempty"`
+}
+
+type onboardingRecord struct {
+	PerformedAt time.Time                          `json:"performed_at,omitempty"`
+	UnitCount   int                                `json:"unit_count,omitempty"`
+	EntryPoint  string                             `json:"entry_point,omitempty"`
+	Contexts    map[string]onboardingContextRecord `json:"contexts,omitempty"`
+}
+
 // ProjectStructure descreve a estrutura de um projeto Delphi.
 type ProjectStructure struct {
 	ProjectPath string    `json:"project_path"`
@@ -60,35 +75,104 @@ func onboardingFilePath(projectPath string) string {
 	return filepath.Join(projectPath, ".oracle-onboarding.json")
 }
 
+func normalizeOnboardingContext(contextKey string) string {
+	normalized := strings.TrimSpace(contextKey)
+	if normalized == "" {
+		return defaultOnboardingContext
+	}
+	return normalized
+}
+
+func loadOnboardingRecord(projectPath string) (onboardingRecord, error) {
+	data, err := os.ReadFile(onboardingFilePath(projectPath))
+	if err != nil {
+		return onboardingRecord{}, err
+	}
+
+	var record onboardingRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return onboardingRecord{}, err
+	}
+
+	if record.Contexts == nil {
+		record.Contexts = make(map[string]onboardingContextRecord)
+	}
+
+	return record, nil
+}
+
+func syncLegacyDefault(record *onboardingRecord) {
+	defaultRecord, hasDefault := record.Contexts[defaultOnboardingContext]
+	if !hasDefault {
+		// Compatibilidade retroativa: quando apenas contextos nao-default sao gravados,
+		// preservamos o topo legado existente ao inves de limpa-lo.
+		return
+	}
+
+	record.PerformedAt = defaultRecord.PerformedAt
+	record.UnitCount = defaultRecord.UnitCount
+	record.EntryPoint = defaultRecord.EntryPoint
+}
+
 // CheckOnboardingPerformed verifica se o onboarding ja foi executado para o projeto.
 func CheckOnboardingPerformed(projectPath string) (bool, time.Time) {
-	data, err := os.ReadFile(onboardingFilePath(projectPath))
+	return CheckOnboardingPerformedWithContext(projectPath, "")
+}
+
+// CheckOnboardingPerformedWithContext verifica se o onboarding ja foi executado para um contexto.
+func CheckOnboardingPerformedWithContext(projectPath, contextKey string) (bool, time.Time) {
+	record, err := loadOnboardingRecord(projectPath)
 	if err != nil {
 		return false, time.Time{}
 	}
 
-	var record struct {
-		PerformedAt time.Time `json:"performed_at"`
-	}
-	if err := json.Unmarshal(data, &record); err != nil {
-		return false, time.Time{}
+	contextKey = normalizeOnboardingContext(contextKey)
+
+	if contextRecord, ok := record.Contexts[contextKey]; ok && !contextRecord.PerformedAt.IsZero() {
+		return true, contextRecord.PerformedAt
 	}
 
-	return true, record.PerformedAt
+	if contextKey == defaultOnboardingContext {
+		if _, hasDefault := record.Contexts[defaultOnboardingContext]; hasDefault {
+			// Precedencia estrita: se contexts.default existe, nunca usar fallback legado.
+			return false, time.Time{}
+		}
+
+		if !record.PerformedAt.IsZero() {
+			return true, record.PerformedAt
+		}
+	}
+
+	return false, time.Time{}
 }
 
 // PerformOnboarding executa o onboarding e salva o registro.
 func PerformOnboarding(projectPath string) (string, error) {
+	return PerformOnboardingWithContext(projectPath, "")
+}
+
+// PerformOnboardingWithContext executa o onboarding e salva o registro por contexto.
+func PerformOnboardingWithContext(projectPath, contextKey string) (string, error) {
 	structure, err := ScanProjectStructure(projectPath)
 	if err != nil {
 		return "", err
 	}
 
-	record := map[string]any{
-		"performed_at": time.Now(),
-		"unit_count":   structure.UnitCount,
-		"entry_point":  structure.EntryPoint,
+	contextKey = normalizeOnboardingContext(contextKey)
+
+	record, err := loadOnboardingRecord(projectPath)
+	if err != nil {
+		record = onboardingRecord{Contexts: make(map[string]onboardingContextRecord)}
 	}
+
+	record.Contexts[contextKey] = onboardingContextRecord{
+		PerformedAt: time.Now(),
+		UnitCount:   structure.UnitCount,
+		EntryPoint:  structure.EntryPoint,
+	}
+
+	syncLegacyDefault(&record)
+
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err == nil {
 		_ = os.WriteFile(onboardingFilePath(projectPath), data, 0o644)

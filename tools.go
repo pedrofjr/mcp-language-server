@@ -91,6 +91,19 @@ func parseOptionalPositiveIntegerArgument(raw any, defaultValue int, argName str
 	return value, nil
 }
 
+func parseOptionalContextArgument(raw any) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("context must be a string")
+	}
+
+	return value, nil
+}
+
 func collectWorkspaceDelphiCandidates(root string) ([]string, error) {
 	collected := make([]string, 0)
 
@@ -2117,9 +2130,15 @@ func (s *mcpServer) registerTools() error {
 	s.mcpServer.AddTool(mcp.NewTool("onboarding",
 		mcp.WithDescription("Escaneia estrutura do projeto Delphi e retorna inventario de units, forms e entry point"),
 		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
+		mcp.WithString("context", mcp.Description("Chave de contexto de onboarding (opcional; default quando omitido)")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		projectPath, _ := request.Params.Arguments["projectPath"].(string)
-		result, err := tools.PerformOnboarding(projectPath)
+		contextKey, err := parseOptionalContextArgument(request.Params.Arguments["context"])
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		result, err := tools.PerformOnboardingWithContext(projectPath, contextKey)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -2129,13 +2148,29 @@ func (s *mcpServer) registerTools() error {
 	s.mcpServer.AddTool(mcp.NewTool("check_onboarding_performed",
 		mcp.WithDescription("Verifica se o onboarding ja foi executado para este projeto"),
 		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
+		mcp.WithString("context", mcp.Description("Chave de contexto de onboarding (opcional; default quando omitido)")),
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		projectPath, _ := request.Params.Arguments["projectPath"].(string)
-		performed, at := tools.CheckOnboardingPerformed(projectPath)
-		if !performed {
-			return mcp.NewToolResultText("Onboarding ainda nao foi executado para este projeto"), nil
+		contextKey, err := parseOptionalContextArgument(request.Params.Arguments["context"])
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Onboarding executado em: %s", at.Format(time.RFC3339))), nil
+
+		performed, at := tools.CheckOnboardingPerformedWithContext(projectPath, contextKey)
+		normalizedContext := strings.TrimSpace(contextKey)
+		if normalizedContext == "" {
+			normalizedContext = "default"
+		}
+
+		contextSuffix := ""
+		if normalizedContext != "default" {
+			contextSuffix = fmt.Sprintf(" (contexto: %s)", normalizedContext)
+		}
+
+		if !performed {
+			return mcp.NewToolResultText("Onboarding ainda nao foi executado para este projeto" + contextSuffix), nil
+		}
+		return mcp.NewToolResultText(fmt.Sprintf("Onboarding executado em: %s%s", at.Format(time.RFC3339), contextSuffix)), nil
 	})
 
 	coreLogger.Info("Successfully registered all MCP tools")
