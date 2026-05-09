@@ -28,7 +28,7 @@ func withToolLogging(name string, h func(context.Context, mcp.CallToolRequest) (
 		start := time.Now()
 		result, err := h(ctx, req)
 		durationMs := time.Since(start).Milliseconds()
-		if err != nil {
+		if err != nil || (result != nil && result.IsError) {
 			coreLogger.Error("tool=%s action=error duration_ms=%d err=%v", name, durationMs, err)
 		} else {
 			coreLogger.Debug("tool=%s action=end duration_ms=%d", name, durationMs)
