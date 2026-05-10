@@ -85,6 +85,7 @@ func TestRegisterTools_RunQuery_ContextCanceledBeforeExecution_ReturnsDeterminis
 	}
 
 	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query canceled-before-execution")
+	assertRunQueryErrorContainsOpToken(t, resultBytes, "OP_RUN_QUERY_CANCELED", "run_query canceled-before-execution")
 }
 
 func TestRegisterTools_RunQuery_DeadlineAlreadyExceeded_ReturnsDeterministicDeadlineExceededError(t *testing.T) {
@@ -133,6 +134,7 @@ func TestRegisterTools_RunQuery_DeadlineAlreadyExceeded_ReturnsDeterministicDead
 	}
 
 	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query expired-deadline")
+	assertRunQueryErrorContainsOpToken(t, resultBytes, "OP_RUN_QUERY_DEADLINE", "run_query expired-deadline")
 }
 
 func TestRegisterTools_RunQuery_CooperativeCheckpoint_RespectsContextCancellationDuringScan(t *testing.T) {
@@ -220,6 +222,9 @@ func TestRegisterTools_RunQuery_CooperativeCheckpoint_RespectsContextCancellatio
 	}
 
 	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query cooperative checkpoint cancellation")
+	if !strings.Contains(string(resultBytes), "OP_RUN_QUERY_CANCELED") && !strings.Contains(string(resultBytes), "OP_RUN_QUERY_DEADLINE") {
+		t.Fatalf("expected run_query cooperative checkpoint cancellation error to include OP_RUN_QUERY_CANCELED or OP_RUN_QUERY_DEADLINE, got %s", string(resultBytes))
+	}
 }
 
 func TestRegisterTools_RunQuery_ExplicitTimeout_WhenScannerIsSlow(t *testing.T) {
@@ -323,6 +328,7 @@ func TestRegisterTools_RunQuery_ExplicitTimeout_WhenScannerIsSlow(t *testing.T) 
 	}
 
 	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query explicit local timeout")
+	assertRunQueryErrorContainsOpToken(t, resultBytes, "OP_RUN_QUERY_DEADLINE", "run_query explicit local timeout")
 }
 
 func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTimeout(t *testing.T) {
@@ -430,6 +436,7 @@ func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTi
 	}
 
 	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query request-deadline precedence")
+	assertRunQueryErrorContainsOpToken(t, resultBytes, "OP_RUN_QUERY_DEADLINE", "run_query request-deadline precedence")
 
 	if elapsed >= 1*time.Second {
 		t.Fatalf("expected run_query to honor the smaller request deadline and fail well before local timeout=%s; elapsed=%s", runQueryHandlerTimeout, elapsed)
@@ -445,5 +452,13 @@ func assertRunQueryErrorContainsActionableMarker(t *testing.T, resultBytes []byt
 
 	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
 		t.Fatalf("expected %s error to include actionable marker 'action:', got %s", scenario, string(resultBytes))
+	}
+}
+
+func assertRunQueryErrorContainsOpToken(t *testing.T, resultBytes []byte, opToken string, scenario string) {
+	t.Helper()
+
+	if !strings.Contains(string(resultBytes), opToken) {
+		t.Fatalf("expected %s error to include operational prefix %q, got %s", scenario, opToken, string(resultBytes))
 	}
 }

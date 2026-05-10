@@ -540,13 +540,33 @@ var runQueryHandlerTimeout = 15 * time.Second
 
 var definitionReferencesHandlerTimeout = 15 * time.Second
 
+var opCanceledTokens = map[string]string{
+	"definition": OpDefinitionCanceled,
+	"references": OpReferencesCanceled,
+}
+
+var opDeadlineTokens = map[string]string{
+	"definition": OpDefinitionDeadline,
+	"references": OpReferencesDeadline,
+}
+
 func deterministicDefinitionReferencesContextError(toolName string, opCtx context.Context, err error) *mcp.CallToolResult {
 	if errors.Is(err, context.Canceled) || (opCtx != nil && errors.Is(opCtx.Err(), context.Canceled)) {
-		return mcp.NewToolResultError(fmt.Sprintf("failed: %s canceled: context canceled | action: retry when context is active", toolName))
+		token := opCanceledTokens[toolName]
+		msg := fmt.Sprintf("failed: %s canceled: context canceled | action: retry when context is active", toolName)
+		if token != "" {
+			msg = opErrMsg(token, msg)
+		}
+		return mcp.NewToolResultError(msg)
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) || (opCtx != nil && errors.Is(opCtx.Err(), context.DeadlineExceeded)) {
-		return mcp.NewToolResultError(fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded | action: retry with longer timeout", toolName))
+		token := opDeadlineTokens[toolName]
+		msg := fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded | action: retry with longer timeout", toolName)
+		if token != "" {
+			msg = opErrMsg(token, msg)
+		}
+		return mcp.NewToolResultError(msg)
 	}
 
 	return nil
@@ -2234,10 +2254,10 @@ func (s *mcpServer) registerTools() error {
 			result, err := runQueryTextScan(opCtx, query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					return mcp.NewToolResultError(fmt.Sprintf("failed: %v | action: retry when context is active", err)), nil
+					return mcp.NewToolResultError(opErrMsg(OpRunQueryCanceled, fmt.Sprintf("failed: %v | action: retry when context is active", err))), nil
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
-					return mcp.NewToolResultError(fmt.Sprintf("failed: %v | action: retry with longer timeout", err)), nil
+					return mcp.NewToolResultError(opErrMsg(OpRunQueryDeadline, fmt.Sprintf("failed: %v | action: retry with longer timeout", err))), nil
 				}
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}

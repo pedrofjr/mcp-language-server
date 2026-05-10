@@ -46,6 +46,7 @@ func TestRegisterTools_Definition_ContextCanceledBeforeExecution_ReturnsDetermin
 		t,
 		callResp,
 		"failed: definition canceled: context canceled",
+		"OP_DEFINITION_CANCELED",
 	)
 }
 
@@ -74,6 +75,7 @@ func TestRegisterTools_Definition_DeadlineAlreadyExceeded_ReturnsDeterministicDe
 		t,
 		callResp,
 		"failed: definition deadline exceeded: context deadline exceeded",
+		"OP_DEFINITION_DEADLINE",
 	)
 }
 
@@ -102,6 +104,7 @@ func TestRegisterTools_References_ContextCanceledBeforeExecution_ReturnsDetermin
 		t,
 		callResp,
 		"failed: references canceled: context canceled",
+		"OP_REFERENCES_CANCELED",
 	)
 }
 
@@ -130,6 +133,7 @@ func TestRegisterTools_References_DeadlineAlreadyExceeded_ReturnsDeterministicDe
 		t,
 		callResp,
 		"failed: references deadline exceeded: context deadline exceeded",
+		"OP_REFERENCES_DEADLINE",
 	)
 }
 
@@ -390,7 +394,7 @@ func mustMarshalRegisterToolsRequestContextFake(v any) json.RawMessage {
 	return b
 }
 
-func assertToolCallResultContainsDeterministicToolError(t *testing.T, response mcp.JSONRPCResponse, expectedErrorText string) {
+func assertToolCallResultContainsDeterministicToolError(t *testing.T, response mcp.JSONRPCResponse, expectedErrorText string, opToken string) {
 	t.Helper()
 
 	resultBytes, err := json.Marshal(response.Result)
@@ -414,6 +418,10 @@ func assertToolCallResultContainsDeterministicToolError(t *testing.T, response m
 
 	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
 		t.Fatalf("expected tool error to include actionable marker 'action:', got %s", string(resultBytes))
+	}
+
+	if opToken != "" && !strings.Contains(string(resultBytes), opToken) {
+		t.Fatalf("expected tool error to include operational prefix %q, got %s", opToken, string(resultBytes))
 	}
 }
 
@@ -442,5 +450,10 @@ func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, respons
 
 	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
 		t.Fatalf("expected %s deadline/timeout error to include actionable marker 'action:', got %s", toolName, string(resultBytes))
+	}
+
+	opToken := "OP_" + strings.ToUpper(toolName) + "_DEADLINE"
+	if !strings.Contains(string(resultBytes), opToken) {
+		t.Fatalf("expected %s deadline error to include operational prefix %q, got %s", toolName, opToken, string(resultBytes))
 	}
 }

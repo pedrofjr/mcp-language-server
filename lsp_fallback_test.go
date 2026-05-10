@@ -53,6 +53,9 @@ func TestWithLSPGuard_WhenClientNilReturnsConsistentError(t *testing.T) {
 	if !strings.Contains(strings.ToLower(string(contentJSON)), "action:") {
 		t.Fatalf("expected guard error to include actionable marker 'action:', got %s", string(contentJSON))
 	}
+	if !strings.Contains(string(contentJSON), "OP_LSP_UNAVAILABLE") {
+		t.Fatalf("expected guard error to include operational prefix 'OP_LSP_UNAVAILABLE', got %s", string(contentJSON))
+	}
 }
 
 // TestWithLSPGuard_WhenClientPresentCallsInner verifica que, quando
@@ -120,6 +123,9 @@ func TestWithToolLogging_ComposedWithLSPGuardNilClient_LogsSingleErrorAndSkipsIn
 	}
 	if !strings.Contains(strings.ToLower(string(contentJSON)), "action:") {
 		t.Fatalf("expected guard error to include actionable marker 'action:', got %s", string(contentJSON))
+	}
+	if !strings.Contains(string(contentJSON), "OP_LSP_UNAVAILABLE") {
+		t.Fatalf("expected guard error to include operational prefix 'OP_LSP_UNAVAILABLE', got %s", string(contentJSON))
 	}
 
 	logs := logBuf.String()
