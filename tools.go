@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -508,7 +509,42 @@ func isImplicitRunQueryNodeTypeCandidate(query string) bool {
 	return true
 }
 
-func runQueryTextScan(query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
+func runQueryContextCheckpoint(ctx context.Context) error {
+	if runQueryCheckpointHook != nil {
+		runQueryCheckpointHook()
+	}
+
+	if ctx == nil {
+		return nil
+	}
+
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("run_query canceled: %w", context.Canceled)
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("run_query deadline exceeded: %w", context.DeadlineExceeded)
+	}
+
+	return fmt.Errorf("run_query context error: %w", err)
+}
+
+var runQueryCheckpointHook func()
+
+func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if err := runQueryContextCheckpoint(ctx); err != nil {
+		return "", err
+	}
+
 	type runQueryMatch struct {
 		FilePath    string `json:"filePath"`
 		StartLine   int    `json:"startLine"`
@@ -536,6 +572,10 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 
 	fileCandidates, err := runQueryCandidates(filePath, strictFilePath)
 	if err != nil {
+		return "", err
+	}
+
+	if err := runQueryContextCheckpoint(ctx); err != nil {
 		return "", err
 	}
 
@@ -628,6 +668,10 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 	}
 
 	for _, candidate := range fileCandidates {
+		if err := runQueryContextCheckpoint(ctx); err != nil {
+			return "", err
+		}
+
 		if len(matches) >= limit {
 			break
 		}
@@ -638,13 +682,17 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 		}
 		readableFiles++
 
-		processTree := func(tree *sitter.Tree, treeContent []byte, previewLines []string, lineOffset int, minByte uint32, maxByte uint32) {
+		processTree := func(tree *sitter.Tree, treeContent []byte, previewLines []string, lineOffset int, minByte uint32, maxByte uint32) error {
+			if err := runQueryContextCheckpoint(ctx); err != nil {
+				return err
+			}
+
 			if tree == nil {
-				return
+				return nil
 			}
 			root := tree.RootNode()
 			if root == nil {
-				return
+				return nil
 			}
 			startCount := len(matches)
 
@@ -652,6 +700,11 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 				cursor := sitter.NewQueryCursor()
 				cursor.Exec(queryNodeType, root)
 				for len(matches) < limit {
+					if err := runQueryContextCheckpoint(ctx); err != nil {
+						cursor.Close()
+						return err
+					}
+
 					match, ok := cursor.NextMatch()
 					if !ok {
 						break
@@ -663,6 +716,11 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 					}
 
 					for _, capture := range match.Captures {
+						if err := runQueryContextCheckpoint(ctx); err != nil {
+							cursor.Close()
+							return err
+						}
+
 						if len(matches) >= limit {
 							break
 						}
@@ -673,11 +731,15 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 				cursor.Close()
 
 				if len(matches) > startCount {
-					return
+					return nil
 				}
 
 				stack := []*sitter.Node{root}
 				for len(stack) > 0 && len(matches) < limit {
+					if err := runQueryContextCheckpoint(ctx); err != nil {
+						return err
+					}
+
 					last := len(stack) - 1
 					node := stack[last]
 					stack = stack[:last]
@@ -697,11 +759,15 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 						}
 					}
 				}
-				return
+				return nil
 			}
 
 			stack := []*sitter.Node{root}
 			for len(stack) > 0 && len(matches) < limit {
+				if err := runQueryContextCheckpoint(ctx); err != nil {
+					return err
+				}
+
 				last := len(stack) - 1
 				node := stack[last]
 				stack = stack[:last]
@@ -721,13 +787,21 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 					}
 				}
 			}
+
+			return nil
+		}
+
+		if err := runQueryContextCheckpoint(ctx); err != nil {
+			return "", err
 		}
 
 		lines := strings.Split(string(content), "\n")
-		tree, parseErr := parser.ParseCtx(context.Background(), nil, content)
+		tree, parseErr := parser.ParseCtx(ctx, nil, content)
 		if parseErr == nil && tree != nil {
 			before := len(matches)
-			processTree(tree, content, lines, 0, 0, uint32(len(content)))
+			if err := processTree(tree, content, lines, 0, 0, uint32(len(content))); err != nil {
+				return "", err
+			}
 
 			root := tree.RootNode()
 			needsSynthetic := len(matches) == before && root != nil && (root.IsError() || root.HasError())
@@ -739,15 +813,26 @@ func runQueryTextScan(query string, nodeType string, filePath string, strictFile
 		prefix := "unit __run_query_tmp__;\ninterface\n"
 		suffix := "\nimplementation\nend.\n"
 		wrappedContent := []byte(prefix + string(content) + suffix)
-		wrappedTree, wrappedErr := parser.ParseCtx(context.Background(), nil, wrappedContent)
-		if wrappedErr != nil || wrappedTree == nil {
+		wrappedTree, wrappedErr := parser.ParseCtx(ctx, nil, wrappedContent)
+		if wrappedErr != nil {
+			if errors.Is(wrappedErr, context.Canceled) || errors.Is(wrappedErr, context.DeadlineExceeded) {
+				if checkpointErr := runQueryContextCheckpoint(ctx); checkpointErr != nil {
+					return "", checkpointErr
+				}
+				return "", fmt.Errorf("run_query context error: %w", wrappedErr)
+			}
+			continue
+		}
+		if wrappedTree == nil {
 			continue
 		}
 
 		prefixLines := strings.Count(prefix, "\n")
 		startByte := uint32(len(prefix))
 		endByte := uint32(len(prefix) + len(content))
-		processTree(wrappedTree, wrappedContent, lines, -prefixLines, startByte, endByte)
+		if err := processTree(wrappedTree, wrappedContent, lines, -prefixLines, startByte, endByte); err != nil {
+			return "", err
+		}
 	}
 
 	if readableFiles == 0 {
@@ -2111,7 +2196,7 @@ func (s *mcpServer) registerTools() error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			result, err := runQueryTextScan(query, nodeType, filePath, strictFilePath, limit)
+			result, err := runQueryTextScan(ctx, query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}
