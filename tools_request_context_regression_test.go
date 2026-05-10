@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,7 +21,7 @@ const registerToolsRequestCtxFakeLSPEnv = "MCP_FAKE_LSP_REGISTER_TOOLS_REQUEST_C
 const registerToolsRequestCtxFakeLSPFixturePathEnv = "MCP_FAKE_LSP_REGISTER_TOOLS_REQUEST_CTX_FIXTURE"
 const registerToolsRequestCtxFakeLSPDelayMSEnv = "MCP_FAKE_LSP_REGISTER_TOOLS_REQUEST_CTX_DELAY_MS"
 
-func TestRegisterTools_Definition_UsesRequestContext_WhenCanceledBeforeExecution(t *testing.T) {
+func TestRegisterTools_Definition_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
 	initializeTestMCPServer(t, svc)
 
@@ -43,10 +42,42 @@ func TestRegisterTools_Definition_UsesRequestContext_WhenCanceledBeforeExecution
 		600,
 	)
 
-	assertToolCallResultContainsContextError(t, callResp, "canceled")
+	assertToolCallResultContainsDeterministicToolError(
+		t,
+		callResp,
+		"failed: definition canceled: context canceled",
+	)
 }
 
-func TestRegisterTools_References_UsesRequestContext_WhenCanceledBeforeExecution(t *testing.T) {
+func TestRegisterTools_Definition_DeadlineAlreadyExceeded_ReturnsDeterministicDeadlineExceededError(t *testing.T) {
+	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
+	initializeTestMCPServer(t, svc)
+
+	requestCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		requestCtx,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "definition",
+			"arguments": map[string]any{
+				"symbolName": "TargetSymbol",
+			},
+		},
+		601,
+	)
+
+	assertToolCallResultContainsDeterministicToolError(
+		t,
+		callResp,
+		"failed: definition deadline exceeded: context deadline exceeded",
+	)
+}
+
+func TestRegisterTools_References_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
 	initializeTestMCPServer(t, svc)
 
@@ -64,37 +95,42 @@ func TestRegisterTools_References_UsesRequestContext_WhenCanceledBeforeExecution
 				"symbolName": "TargetSymbol",
 			},
 		},
-		601,
+		602,
 	)
 
-	assertToolCallResultContainsContextError(t, callResp, "canceled")
+	assertToolCallResultContainsDeterministicToolError(
+		t,
+		callResp,
+		"failed: references canceled: context canceled",
+	)
 }
 
-func TestRegisterTools_DefinitionAndReferences_UsesRequestDeadline_WhenExpired(t *testing.T) {
+func TestRegisterTools_References_DeadlineAlreadyExceeded_ReturnsDeterministicDeadlineExceededError(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
 	initializeTestMCPServer(t, svc)
 
-	toolsToCheck := []string{"definition", "references"}
-	for i, toolName := range toolsToCheck {
-		requestCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	requestCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
 
-		callResp := handleTestMCPRequestWithContext(
-			t,
-			svc,
-			requestCtx,
-			mcp.MethodToolsCall,
-			map[string]any{
-				"name": toolName,
-				"arguments": map[string]any{
-					"symbolName": "TargetSymbol",
-				},
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		requestCtx,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "references",
+			"arguments": map[string]any{
+				"symbolName": "TargetSymbol",
 			},
-			610+i,
-		)
+		},
+		603,
+	)
 
-		assertToolCallResultContainsContextError(t, callResp, "deadline exceeded")
-		cancel()
-	}
+	assertToolCallResultContainsDeterministicToolError(
+		t,
+		callResp,
+		"failed: references deadline exceeded: context deadline exceeded",
+	)
 }
 
 func TestRegisterTools_Definition_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
@@ -354,7 +390,7 @@ func mustMarshalRegisterToolsRequestContextFake(v any) json.RawMessage {
 	return b
 }
 
-func assertToolCallResultContainsContextError(t *testing.T, response mcp.JSONRPCResponse, expectedErrorSubstr string) {
+func assertToolCallResultContainsDeterministicToolError(t *testing.T, response mcp.JSONRPCResponse, expectedErrorText string) {
 	t.Helper()
 
 	resultBytes, err := json.Marshal(response.Result)
@@ -369,12 +405,11 @@ func assertToolCallResultContainsContextError(t *testing.T, response mcp.JSONRPC
 
 	isError, _ := callResult["isError"].(bool)
 	if !isError {
-		t.Fatalf("expected tool error containing %q, but result was not an error: %s", expectedErrorSubstr, string(resultBytes))
+		t.Fatalf("expected deterministic tool error %q, but result was not an error: %s", expectedErrorText, string(resultBytes))
 	}
 
-	lowerResult := strings.ToLower(string(resultBytes))
-	if !strings.Contains(lowerResult, strings.ToLower(expectedErrorSubstr)) {
-		t.Fatalf("expected tool error to contain %q, got %s", expectedErrorSubstr, string(resultBytes))
+	if !strings.Contains(string(resultBytes), expectedErrorText) {
+		t.Fatalf("expected tool error to contain exact contract %q, got %s", expectedErrorText, string(resultBytes))
 	}
 }
 
@@ -396,13 +431,8 @@ func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, respons
 		t.Fatalf("expected %s to return tool error, got %s", toolName, string(resultBytes))
 	}
 
-	lowerResult := strings.ToLower(string(resultBytes))
-	if !strings.Contains(lowerResult, "deadline exceeded") {
-		t.Fatalf("expected %s tool error mentioning deadline exceeded, got %s", toolName, string(resultBytes))
-	}
-
-	errorContractPattern := regexp.MustCompile(`(?i)failed[^\n\r]*` + regexp.QuoteMeta(toolName))
-	if !errorContractPattern.Match(resultBytes) {
-		t.Fatalf("expected %s tool error contract to include a stable 'failed ... %s' pattern, got %s", toolName, toolName, string(resultBytes))
+	expected := "failed: " + toolName + " deadline exceeded: context deadline exceeded"
+	if !strings.Contains(string(resultBytes), expected) {
+		t.Fatalf("expected %s tool error contract %q, got %s", toolName, expected, string(resultBytes))
 	}
 }

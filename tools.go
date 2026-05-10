@@ -540,6 +540,18 @@ var runQueryHandlerTimeout = 15 * time.Second
 
 var definitionReferencesHandlerTimeout = 15 * time.Second
 
+func deterministicDefinitionReferencesContextError(toolName string, opCtx context.Context, err error) *mcp.CallToolResult {
+	if errors.Is(err, context.Canceled) || (opCtx != nil && errors.Is(opCtx.Err(), context.Canceled)) {
+		return mcp.NewToolResultError(fmt.Sprintf("failed: %s canceled: context canceled", toolName))
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || (opCtx != nil && errors.Is(opCtx.Err(), context.DeadlineExceeded)) {
+		return mcp.NewToolResultError(fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded", toolName))
+	}
+
+	return nil
+}
+
 func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -965,6 +977,11 @@ func (s *mcpServer) registerTools() error {
 
 		text, err := tools.ReadDefinition(opCtx, s.lspClient, symbolName)
 		if err != nil {
+			if deterministicError := deterministicDefinitionReferencesContextError("definition", opCtx, err); deterministicError != nil {
+				coreLogger.Error("Failed to get definition: %v", err)
+				return deterministicError, nil
+			}
+
 			coreLogger.Error("Failed to get definition: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get definition: %v", err)), nil
 		}
@@ -992,6 +1009,11 @@ func (s *mcpServer) registerTools() error {
 
 		text, err := tools.FindReferences(opCtx, s.lspClient, symbolName)
 		if err != nil {
+			if deterministicError := deterministicDefinitionReferencesContextError("references", opCtx, err); deterministicError != nil {
+				coreLogger.Error("Failed to find references: %v", err)
+				return deterministicError, nil
+			}
+
 			coreLogger.Error("Failed to find references: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to find references: %v", err)), nil
 		}
