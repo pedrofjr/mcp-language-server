@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -96,7 +97,104 @@ func TestRegisterTools_DefinitionAndReferences_UsesRequestDeadline_WhenExpired(t
 	}
 }
 
+func TestRegisterTools_Definition_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
+	originalTimeout := definitionReferencesHandlerTimeout
+	definitionReferencesHandlerTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		definitionReferencesHandlerTimeout = originalTimeout
+	})
+
+	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	requestCtx := context.Background()
+
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		requestCtx,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "definition",
+			"arguments": map[string]any{
+				"symbolName": "TargetSymbol",
+			},
+		},
+		620,
+	)
+
+	assertToolCallResultContainsDeadlineExceededToolError(t, callResp, "definition")
+}
+
+func TestRegisterTools_References_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
+	originalTimeout := definitionReferencesHandlerTimeout
+	definitionReferencesHandlerTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		definitionReferencesHandlerTimeout = originalTimeout
+	})
+
+	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	requestCtx := context.Background()
+
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		requestCtx,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "references",
+			"arguments": map[string]any{
+				"symbolName": "TargetSymbol",
+			},
+		},
+		621,
+	)
+
+	assertToolCallResultContainsDeadlineExceededToolError(t, callResp, "references")
+}
+
+func TestRegisterTools_DefinitionAndReferences_RequestDeadlinePrecedence_WhenSmallerThanLocalTimeout(t *testing.T) {
+	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	toolsToCheck := []string{"definition", "references"}
+	for i, toolName := range toolsToCheck {
+		requestCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		start := time.Now()
+
+		callResp := handleTestMCPRequestWithContext(
+			t,
+			svc,
+			requestCtx,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": toolName,
+				"arguments": map[string]any{
+					"symbolName": "TargetSymbol",
+				},
+			},
+			630+i,
+		)
+
+		elapsed := time.Since(start)
+		cancel()
+
+		assertToolCallResultContainsDeadlineExceededToolError(t, callResp, toolName)
+		if elapsed >= 300*time.Millisecond {
+			t.Fatalf("expected %s to honor the smaller request deadline and fail quickly; elapsed=%s", toolName, elapsed)
+		}
+	}
+}
+
 func newRegisteredTestMCPServerWithContextFakeLSP(t *testing.T) *mcpServer {
+	t.Helper()
+
+	return newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 100*time.Millisecond)
+}
+
+func newRegisteredTestMCPServerWithContextFakeLSPDelay(t *testing.T, fakeDelay time.Duration) *mcpServer {
 	t.Helper()
 
 	workspaceDir := t.TempDir()
@@ -106,7 +204,7 @@ func newRegisteredTestMCPServerWithContextFakeLSP(t *testing.T) *mcpServer {
 		t.Fatalf("failed to create Delphi fixture for request-context tests: %v", err)
 	}
 
-	client := newRegisterToolsRequestContextFakeLSPClient(t, workspaceDir, fixturePath)
+	client := newRegisterToolsRequestContextFakeLSPClientWithDelay(t, workspaceDir, fixturePath, fakeDelay)
 
 	svc := &mcpServer{ctx: context.Background(), lspClient: client}
 	svc.mcpServer = newMCPServer()
@@ -121,9 +219,15 @@ func newRegisteredTestMCPServerWithContextFakeLSP(t *testing.T) *mcpServer {
 func newRegisterToolsRequestContextFakeLSPClient(t *testing.T, workspaceDir string, fixturePath string) *lsp.Client {
 	t.Helper()
 
+	return newRegisterToolsRequestContextFakeLSPClientWithDelay(t, workspaceDir, fixturePath, 100*time.Millisecond)
+}
+
+func newRegisterToolsRequestContextFakeLSPClientWithDelay(t *testing.T, workspaceDir string, fixturePath string, delay time.Duration) *lsp.Client {
+	t.Helper()
+
 	t.Setenv(registerToolsRequestCtxFakeLSPEnv, "1")
 	t.Setenv(registerToolsRequestCtxFakeLSPFixturePathEnv, fixturePath)
-	t.Setenv(registerToolsRequestCtxFakeLSPDelayMSEnv, "100")
+	t.Setenv(registerToolsRequestCtxFakeLSPDelayMSEnv, strconv.Itoa(int(delay.Milliseconds())))
 
 	execPath, err := os.Executable()
 	if err != nil {
@@ -271,5 +375,34 @@ func assertToolCallResultContainsContextError(t *testing.T, response mcp.JSONRPC
 	lowerResult := strings.ToLower(string(resultBytes))
 	if !strings.Contains(lowerResult, strings.ToLower(expectedErrorSubstr)) {
 		t.Fatalf("expected tool error to contain %q, got %s", expectedErrorSubstr, string(resultBytes))
+	}
+}
+
+func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, response mcp.JSONRPCResponse, toolName string) {
+	t.Helper()
+
+	resultBytes, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal %s result: %v", toolName, err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode %s result map: %v", toolName, err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected %s to return tool error, got %s", toolName, string(resultBytes))
+	}
+
+	lowerResult := strings.ToLower(string(resultBytes))
+	if !strings.Contains(lowerResult, "deadline exceeded") {
+		t.Fatalf("expected %s tool error mentioning deadline exceeded, got %s", toolName, string(resultBytes))
+	}
+
+	errorContractPattern := regexp.MustCompile(`(?i)failed[^\n\r]*` + regexp.QuoteMeta(toolName))
+	if !errorContractPattern.Match(resultBytes) {
+		t.Fatalf("expected %s tool error contract to include a stable 'failed ... %s' pattern, got %s", toolName, toolName, string(resultBytes))
 	}
 }

@@ -536,6 +536,8 @@ func runQueryContextCheckpoint(ctx context.Context) error {
 
 var runQueryCheckpointHook func()
 
+var definitionReferencesHandlerTimeout = 15 * time.Second
+
 func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -956,7 +958,10 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing definition for symbol: %s", symbolName)
-		text, err := tools.ReadDefinition(ctx, s.lspClient, symbolName)
+		opCtx, cancel := context.WithTimeout(ctx, definitionReferencesHandlerTimeout)
+		defer cancel()
+
+		text, err := tools.ReadDefinition(opCtx, s.lspClient, symbolName)
 		if err != nil {
 			coreLogger.Error("Failed to get definition: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get definition: %v", err)), nil
@@ -980,7 +985,10 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing references for symbol: %s", symbolName)
-		text, err := tools.FindReferences(ctx, s.lspClient, symbolName)
+		opCtx, cancel := context.WithTimeout(ctx, definitionReferencesHandlerTimeout)
+		defer cancel()
+
+		text, err := tools.FindReferences(opCtx, s.lspClient, symbolName)
 		if err != nil {
 			coreLogger.Error("Failed to find references: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to find references: %v", err)), nil
