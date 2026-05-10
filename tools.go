@@ -956,7 +956,7 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing definition for symbol: %s", symbolName)
-		text, err := tools.ReadDefinition(s.ctx, s.lspClient, symbolName)
+		text, err := tools.ReadDefinition(ctx, s.lspClient, symbolName)
 		if err != nil {
 			coreLogger.Error("Failed to get definition: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get definition: %v", err)), nil
@@ -980,7 +980,7 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing references for symbol: %s", symbolName)
-		text, err := tools.FindReferences(s.ctx, s.lspClient, symbolName)
+		text, err := tools.FindReferences(ctx, s.lspClient, symbolName)
 		if err != nil {
 			coreLogger.Error("Failed to find references: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to find references: %v", err)), nil
