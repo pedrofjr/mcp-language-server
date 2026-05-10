@@ -216,6 +216,216 @@ func TestRegisterTools_RunQuery_CooperativeCheckpoint_RespectsContextCancellatio
 	}
 }
 
+func TestRegisterTools_RunQuery_ExplicitTimeout_WhenScannerIsSlow(t *testing.T) {
+	originalTimeout := runQueryHandlerTimeout
+	runQueryHandlerTimeout = 40 * time.Millisecond
+	t.Cleanup(func() {
+		runQueryHandlerTimeout = originalTimeout
+	})
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to capture working directory: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	for i := 0; i < 120; i++ {
+		filePath := filepath.Join(tempDir, "slow_scan_"+formatRunQueryCancellationIndex(i)+".pas")
+		content := strings.Repeat("procedure SlowProc"+formatRunQueryCancellationIndex(i)+";\n", 300)
+		if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write slow scan fixture %q: %v", filePath, err)
+		}
+	}
+
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to change working directory for run_query explicit-timeout test: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("failed to restore working directory: %v", chdirErr)
+		}
+	})
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	gate := make(chan struct{})
+	releaseFallback := make(chan struct{})
+	defer close(releaseFallback)
+
+	// Gate the first checkpoint to force a deterministic slow scan start.
+	originalHook := runQueryCheckpointHook
+	var checkpointCount atomic.Int32
+	runQueryCheckpointHook = func() {
+		if checkpointCount.Add(1) == 1 {
+			select {
+			case <-gate:
+			case <-releaseFallback:
+			}
+		}
+	}
+	t.Cleanup(func() {
+		runQueryCheckpointHook = originalHook
+	})
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		close(gate)
+	}()
+
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		context.Background(),
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": "TokenThatShouldNotExistAnywhere",
+				"limit": 10000,
+			},
+		},
+		4004,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query explicit-timeout result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query explicit-timeout result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query explicit local timeout to return tool error, got %s", string(resultBytes))
+	}
+
+	if checkpointCount.Load() == 0 {
+		t.Fatalf("expected run_query explicit-timeout test to hit checkpoint hook at least once")
+	}
+
+	lower := strings.ToLower(string(resultBytes))
+	if !strings.Contains(lower, "deadline exceeded") {
+		t.Fatalf("expected run_query explicit local timeout error mentioning deadline exceeded, got %s", string(resultBytes))
+	}
+
+	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+deadline\s+exceeded:`).Match(resultBytes) {
+		t.Fatalf("expected explicit local timeout to follow handler error contract 'failed: run_query deadline exceeded:', got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTimeout(t *testing.T) {
+	originalTimeout := runQueryHandlerTimeout
+	runQueryHandlerTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		runQueryHandlerTimeout = originalTimeout
+	})
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to capture working directory: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	for i := 0; i < 120; i++ {
+		filePath := filepath.Join(tempDir, "slow_scan_deadline_precedence_"+formatRunQueryCancellationIndex(i)+".pas")
+		content := strings.Repeat("procedure SlowDeadlinePrecedenceProc"+formatRunQueryCancellationIndex(i)+";\n", 300)
+		if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write slow scan fixture %q: %v", filePath, err)
+		}
+	}
+
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to change working directory for run_query request-deadline precedence test: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("failed to restore working directory: %v", chdirErr)
+		}
+	})
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	gate := make(chan struct{})
+	releaseFallback := make(chan struct{})
+	defer close(releaseFallback)
+
+	originalHook := runQueryCheckpointHook
+	var checkpointCount atomic.Int32
+	runQueryCheckpointHook = func() {
+		if checkpointCount.Add(1) == 1 {
+			select {
+			case <-gate:
+			case <-releaseFallback:
+			}
+		}
+	}
+	t.Cleanup(func() {
+		runQueryCheckpointHook = originalHook
+	})
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		close(gate)
+	}()
+
+	requestCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	callResp := handleTestMCPRequestWithContext(
+		t,
+		svc,
+		requestCtx,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"query": "TokenThatShouldNotExistAnywhere",
+				"limit": 10000,
+			},
+		},
+		4005,
+	)
+	elapsed := time.Since(start)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal run_query request-deadline precedence result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode run_query request-deadline precedence result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected run_query request deadline precedence to return tool error, got %s", string(resultBytes))
+	}
+
+	if checkpointCount.Load() == 0 {
+		t.Fatalf("expected run_query request-deadline precedence test to hit checkpoint hook at least once")
+	}
+
+	lower := strings.ToLower(string(resultBytes))
+	if !strings.Contains(lower, "deadline exceeded") {
+		t.Fatalf("expected run_query request-deadline precedence error mentioning deadline exceeded, got %s", string(resultBytes))
+	}
+
+	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+deadline\s+exceeded:`).Match(resultBytes) {
+		t.Fatalf("expected request deadline precedence to follow handler error contract 'failed: run_query deadline exceeded:', got %s", string(resultBytes))
+	}
+
+	if elapsed >= 1*time.Second {
+		t.Fatalf("expected run_query to honor the smaller request deadline and fail well before local timeout=%s; elapsed=%s", runQueryHandlerTimeout, elapsed)
+	}
+}
+
 func formatRunQueryCancellationIndex(i int) string {
 	return fmt.Sprintf("%03d", i)
 }

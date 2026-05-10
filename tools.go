@@ -536,6 +536,8 @@ func runQueryContextCheckpoint(ctx context.Context) error {
 
 var runQueryCheckpointHook func()
 
+var runQueryHandlerTimeout = 15 * time.Second
+
 var definitionReferencesHandlerTimeout = 15 * time.Second
 
 func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
@@ -2204,7 +2206,10 @@ func (s *mcpServer) registerTools() error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 
-			result, err := runQueryTextScan(ctx, query, nodeType, filePath, strictFilePath, limit)
+			opCtx, cancel := context.WithTimeout(ctx, runQueryHandlerTimeout)
+			defer cancel()
+
+			result, err := runQueryTextScan(opCtx, query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}
