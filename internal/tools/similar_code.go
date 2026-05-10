@@ -17,6 +17,7 @@ var delphiStopTokens = map[string]bool{
 }
 
 const windowSize = 10
+const minQueryCoverage = 0.5
 
 // FindSimilarCode procura janelas de código semelhantes usando similaridade de Jaccard.
 func FindSimilarCode(src, query string, threshold float64) []SimilarBlock {
@@ -40,7 +41,15 @@ func FindSimilarCode(src, query string, threshold float64) []SimilarBlock {
 func evaluateWindow(lines []string, queryTokens []string, threshold float64, start int) []SimilarBlock {
 	window := strings.Join(lines, "\n")
 	windowTokens := tokenize(window)
-	score := jaccardSimilarity(queryTokens, windowTokens)
+	metrics := calculateSimilarityMetrics(queryTokens, windowTokens)
+	if metrics.intersection < minOverlapForQuery(metrics.querySetSize) {
+		return nil
+	}
+	if metrics.coverage < minQueryCoverage {
+		return nil
+	}
+
+	score := 0.7*metrics.jaccard + 0.3*metrics.coverage
 	if score < threshold {
 		return nil
 	}
@@ -51,6 +60,60 @@ func evaluateWindow(lines []string, queryTokens []string, threshold float64, sta
 		Score:     score,
 		Snippet:   window,
 	}}
+}
+
+type similarityMetrics struct {
+	jaccard      float64
+	coverage     float64
+	intersection int
+	querySetSize int
+}
+
+func minOverlapForQuery(querySetSize int) int {
+	if querySetSize <= 1 {
+		return 1
+	}
+	return 2
+}
+
+func calculateSimilarityMetrics(queryTokens, windowTokens []string) similarityMetrics {
+	querySet := make(map[string]struct{}, len(queryTokens))
+	windowSet := make(map[string]struct{}, len(windowTokens))
+
+	for _, token := range queryTokens {
+		querySet[token] = struct{}{}
+	}
+	for _, token := range windowTokens {
+		windowSet[token] = struct{}{}
+	}
+
+	intersection := 0
+	for token := range querySet {
+		if _, ok := windowSet[token]; ok {
+			intersection++
+		}
+	}
+
+	querySetSize := len(querySet)
+	coverage := 0.0
+	if querySetSize > 0 {
+		coverage = float64(intersection) / float64(querySetSize)
+	}
+
+	union := len(querySet) + len(windowSet) - intersection
+	jaccard := 0.0
+	if union == 0 {
+		jaccard = 1
+	} else {
+		jaccard = float64(intersection) / float64(union)
+	}
+
+	return similarityMetrics{
+		jaccard:      jaccard,
+		coverage:     coverage,
+		intersection: intersection,
+		querySetSize: querySetSize,
+	}
 }
 
 func tokenize(text string) []string {
