@@ -2962,6 +2962,480 @@ func TestRegisterTools_MemoryRead_RejectsTitleOnlyArguments(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_FindSimilarCode_DefaultThresholdWhenOmitted_RemainsFunctional(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src": `procedure TSample.Run;
+begin
+  ParseJson;
+end;`,
+				"query": "ParseJson",
+			},
+		},
+		103,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal find_similar_code result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode find_similar_code result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected find_similar_code without threshold to remain functional, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_DefaultWindowLinesWhenOmitted_MatchesExplicitTen(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	baseArgs := map[string]any{
+		"src": `line_01
+line_02
+line_03
+line_04
+line_05
+line_06
+line_07
+line_08
+line_09
+line_10
+line_11`,
+		"query":     "line_01 line_02 line_03",
+		"threshold": 0.3,
+	}
+
+	omittedResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name":      "find_similar_code",
+			"arguments": baseArgs,
+		},
+		104,
+	)
+
+	explicitResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src":          baseArgs["src"],
+				"query":        baseArgs["query"],
+				"threshold":    baseArgs["threshold"],
+				"window_lines": 10,
+			},
+		},
+		105,
+	)
+
+	omittedBytes, err := json.Marshal(omittedResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal omitted-window result: %v", err)
+	}
+
+	explicitBytes, err := json.Marshal(explicitResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal explicit-window result: %v", err)
+	}
+
+	var omittedResult map[string]any
+	if err := json.Unmarshal(omittedBytes, &omittedResult); err != nil {
+		t.Fatalf("failed to decode omitted-window result: %v", err)
+	}
+
+	var explicitResult map[string]any
+	if err := json.Unmarshal(explicitBytes, &explicitResult); err != nil {
+		t.Fatalf("failed to decode explicit-window result: %v", err)
+	}
+
+	omittedIsError, _ := omittedResult["isError"].(bool)
+	if omittedIsError {
+		t.Fatalf("expected find_similar_code with omitted window_lines to succeed, got %s", string(omittedBytes))
+	}
+
+	explicitIsError, _ := explicitResult["isError"].(bool)
+	if explicitIsError {
+		t.Fatalf("expected find_similar_code with explicit window_lines=10 to succeed, got %s", string(explicitBytes))
+	}
+
+	if string(omittedBytes) != string(explicitBytes) {
+		t.Fatalf("expected omitted window_lines to behave like explicit window_lines=10; omitted=%s explicit=%s", string(omittedBytes), string(explicitBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsThresholdOutOfRange(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	cases := []struct {
+		name      string
+		threshold float64
+		id        int
+	}{
+		{name: "threshold below zero", threshold: -0.01, id: 106},
+		{name: "threshold above one", threshold: 1.01, id: 107},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": "find_similar_code",
+				"arguments": map[string]any{
+					"src":       "alpha beta gamma",
+					"query":     "alpha beta",
+					"threshold": tc.threshold,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected out-of-range threshold to return tool error, got %s", tc.name, string(resultBytes))
+		}
+
+		if !strings.Contains(string(resultBytes), "threshold") {
+			t.Fatalf("%s: expected out-of-range threshold error message, got %s", tc.name, string(resultBytes))
+		}
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsThresholdInvalidType(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src":       "alpha beta gamma",
+				"query":     "alpha beta",
+				"threshold": "0.5",
+			},
+		},
+		108,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected find_similar_code with non-numeric threshold to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "threshold must be a number") {
+		t.Fatalf("expected threshold type validation message, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsThresholdNaNAndInfinityTokens(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	cases := []struct {
+		name      string
+		threshold string
+		id        int
+	}{
+		{name: "threshold token NaN", threshold: "NaN", id: 118},
+		{name: "threshold token +Inf", threshold: "+Inf", id: 119},
+		{name: "threshold token -Inf", threshold: "-Inf", id: 120},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": "find_similar_code",
+				"arguments": map[string]any{
+					"src":       "alpha beta gamma",
+					"query":     "alpha beta",
+					"threshold": tc.threshold,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected invalid threshold token to return tool error, got %s", tc.name, string(resultBytes))
+		}
+
+		if !strings.Contains(string(resultBytes), "threshold") {
+			t.Fatalf("%s: expected threshold validation message, got %s", tc.name, string(resultBytes))
+		}
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsWindowLinesInvalidType(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src":          "alpha beta gamma",
+				"query":        "alpha beta",
+				"threshold":    0.3,
+				"window_lines": "10",
+			},
+		},
+		109,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected find_similar_code with invalid window_lines type to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "window_lines") {
+		t.Fatalf("expected window_lines type validation message, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsWindowLinesOutOfRange(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	cases := []struct {
+		name        string
+		windowLines int
+		id          int
+	}{
+		{name: "window_lines zero", windowLines: 0, id: 110},
+		{name: "window_lines negative", windowLines: -1, id: 111},
+		{name: "window_lines above max", windowLines: 201, id: 112},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": "find_similar_code",
+				"arguments": map[string]any{
+					"src":          "alpha beta gamma",
+					"query":        "alpha beta",
+					"threshold":    0.3,
+					"window_lines": tc.windowLines,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if !isError {
+			t.Fatalf("%s: expected out-of-range window_lines to return tool error, got %s", tc.name, string(resultBytes))
+		}
+
+		if !strings.Contains(string(resultBytes), "window_lines") {
+			t.Fatalf("%s: expected out-of-range window_lines error message, got %s", tc.name, string(resultBytes))
+		}
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_RejectsWindowLinesFractionalFloat(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src":          "alpha beta gamma",
+				"query":        "alpha beta",
+				"threshold":    0.3,
+				"window_lines": 10.5,
+			},
+		},
+		116,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if !isError {
+		t.Fatalf("expected find_similar_code with fractional window_lines to return tool error, got %s", string(resultBytes))
+	}
+
+	if !strings.Contains(string(resultBytes), "window_lines") {
+		t.Fatalf("expected window_lines fractional validation message, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_AcceptsWindowLinesIntegralFloat(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "find_similar_code",
+			"arguments": map[string]any{
+				"src":          "alpha beta gamma",
+				"query":        "alpha beta",
+				"threshold":    0.3,
+				"window_lines": 10.0,
+			},
+		},
+		117,
+	)
+
+	resultBytes, err := json.Marshal(callResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal result: %v", err)
+	}
+
+	var callResult map[string]any
+	if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+		t.Fatalf("failed to decode result map: %v", err)
+	}
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		t.Fatalf("expected find_similar_code with integral float window_lines to succeed, got %s", string(resultBytes))
+	}
+}
+
+func TestRegisterTools_FindSimilarCode_AcceptsWindowLinesBoundaryValues(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	cases := []struct {
+		name        string
+		windowLines int
+		id          int
+	}{
+		{name: "window_lines minimum boundary", windowLines: 1, id: 121},
+		{name: "window_lines maximum boundary", windowLines: 200, id: 122},
+	}
+
+	for _, tc := range cases {
+		callResp := handleTestMCPRequest(
+			t,
+			svc,
+			mcp.MethodToolsCall,
+			map[string]any{
+				"name": "find_similar_code",
+				"arguments": map[string]any{
+					"src":          "alpha beta gamma",
+					"query":        "alpha beta",
+					"threshold":    0.3,
+					"window_lines": tc.windowLines,
+				},
+			},
+			tc.id,
+		)
+
+		resultBytes, err := json.Marshal(callResp.Result)
+		if err != nil {
+			t.Fatalf("%s: failed to marshal result: %v", tc.name, err)
+		}
+
+		var callResult map[string]any
+		if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+			t.Fatalf("%s: failed to decode result map: %v", tc.name, err)
+		}
+
+		isError, _ := callResult["isError"].(bool)
+		if isError {
+			t.Fatalf("%s: expected boundary window_lines to succeed, got %s", tc.name, string(resultBytes))
+		}
+	}
+}
+
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 

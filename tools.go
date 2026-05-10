@@ -1894,6 +1894,9 @@ func (s *mcpServer) registerTools() error {
 			mcp.WithNumber("threshold",
 				mcp.Description("Similarity threshold [0.0, 1.0], default 0.3"),
 			),
+			mcp.WithNumber("window_lines",
+				mcp.Description("Sliding window size in lines [1, 200], default 10"),
+			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			src, ok := req.Params.Arguments["src"].(string)
@@ -1916,9 +1919,38 @@ func (s *mcpServer) registerTools() error {
 				default:
 					return mcp.NewToolResultError("threshold must be a number"), nil
 				}
+
+				if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0.0 || threshold > 1.0 {
+					return mcp.NewToolResultError("threshold must be a finite number between 0.0 and 1.0"), nil
+				}
 			}
 
-			blocks := tools.FindSimilarCode(src, query, threshold)
+			windowLines := 10
+			if raw, exists := req.Params.Arguments["window_lines"]; exists && raw != nil {
+				switch value := raw.(type) {
+				case float64:
+					if math.IsNaN(value) || math.IsInf(value, 0) {
+						return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+					}
+					if value != math.Trunc(value) {
+						return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+					}
+					windowLines = int(value)
+				case int:
+					windowLines = value
+				default:
+					return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+				}
+
+				if windowLines < 1 || windowLines > 200 {
+					return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+				}
+			}
+
+			blocks := tools.FindSimilarCodeWithOptions(src, query, tools.FindSimilarCodeOptions{
+				Threshold:   threshold,
+				WindowLines: windowLines,
+			})
 			data, err := json.Marshal(blocks)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal similar blocks: %v", err)), nil

@@ -16,7 +16,7 @@ var delphiStopTokens = map[string]bool{
 	"implementation": true, "interface": true, "unit": true, "program": true,
 }
 
-const windowSize = 10
+const defaultWindowLines = 10
 const minQueryCoverage = 0.5
 const textualWeight = 0.65
 const structuralWeight = 0.35
@@ -26,8 +26,34 @@ const minControlFlowOverlap = 0.5
 var structuralFeatures = []string{"if", "else", "while", "for", "case", "try", "repeat", "begin", "end"}
 var controlFlowFeatures = []string{"if", "else", "while", "for", "case", "try", "repeat"}
 
+type FindSimilarCodeOptions struct {
+	Threshold   float64
+	WindowLines int
+}
+
 // FindSimilarCode procura janelas de código semelhantes usando similaridade de Jaccard.
 func FindSimilarCode(src, query string, threshold float64) []SimilarBlock {
+	return FindSimilarCodeWithOptions(src, query, FindSimilarCodeOptions{
+		Threshold:   threshold,
+		WindowLines: defaultWindowLines,
+	})
+}
+
+// FindSimilarCodeWithWindow procura blocos similares com janela de varredura configurável.
+func FindSimilarCodeWithWindow(src, query string, threshold float64, windowLines int) []SimilarBlock {
+	return FindSimilarCodeWithOptions(src, query, FindSimilarCodeOptions{
+		Threshold:   threshold,
+		WindowLines: windowLines,
+	})
+}
+
+// FindSimilarCodeWithOptions procura blocos similares com threshold e janela configuráveis.
+func FindSimilarCodeWithOptions(src, query string, opts FindSimilarCodeOptions) []SimilarBlock {
+	windowLines := opts.WindowLines
+	if windowLines <= 0 {
+		windowLines = defaultWindowLines
+	}
+
 	queryTokens := tokenize(query)
 	if len(queryTokens) == 0 {
 		return nil
@@ -35,13 +61,13 @@ func FindSimilarCode(src, query string, threshold float64) []SimilarBlock {
 	queryStructure := extractStructuralSignature(query)
 
 	lines := strings.Split(src, "\n")
-	if len(lines) < windowSize {
-		return evaluateWindow(lines, queryTokens, queryStructure, threshold, 0)
+	if len(lines) < windowLines {
+		return evaluateWindow(lines, queryTokens, queryStructure, opts.Threshold, 0)
 	}
 
 	var blocks []SimilarBlock
-	for start := 0; start+windowSize <= len(lines); start++ {
-		blocks = append(blocks, evaluateWindow(lines[start:start+windowSize], queryTokens, queryStructure, threshold, start)...)
+	for start := 0; start+windowLines <= len(lines); start++ {
+		blocks = append(blocks, evaluateWindow(lines[start:start+windowLines], queryTokens, queryStructure, opts.Threshold, start)...)
 	}
 	return blocks
 }
