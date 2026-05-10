@@ -34,9 +34,24 @@ func TestWithLSPGuard_WhenClientNilReturnsConsistentError(t *testing.T) {
 	if result == nil {
 		t.Fatal("result should not be nil")
 	}
+	if !result.IsError {
+		t.Fatal("expected ToolResultError when client is nil")
+	}
+
 	// Verifica que o result é um error result com mensagem consistente
 	if len(result.Content) == 0 {
 		t.Fatal("result.Content should not be empty")
+	}
+
+	contentJSON, marshalErr := json.Marshal(result.Content)
+	if marshalErr != nil {
+		t.Fatalf("failed to marshal result content for assertion: %v", marshalErr)
+	}
+	if !strings.Contains(string(contentJSON), "language server not available") {
+		t.Fatalf("expected guard error to keep prefix 'language server not available', got %s", string(contentJSON))
+	}
+	if !strings.Contains(strings.ToLower(string(contentJSON)), "action:") {
+		t.Fatalf("expected guard error to include actionable marker 'action:', got %s", string(contentJSON))
 	}
 }
 
@@ -102,6 +117,9 @@ func TestWithToolLogging_ComposedWithLSPGuardNilClient_LogsSingleErrorAndSkipsIn
 	}
 	if !strings.Contains(string(contentJSON), "language server not available") {
 		t.Fatalf("expected guard error message in result content, got %s", string(contentJSON))
+	}
+	if !strings.Contains(strings.ToLower(string(contentJSON)), "action:") {
+		t.Fatalf("expected guard error to include actionable marker 'action:', got %s", string(contentJSON))
 	}
 
 	logs := logBuf.String()

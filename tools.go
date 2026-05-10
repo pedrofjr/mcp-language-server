@@ -542,11 +542,11 @@ var definitionReferencesHandlerTimeout = 15 * time.Second
 
 func deterministicDefinitionReferencesContextError(toolName string, opCtx context.Context, err error) *mcp.CallToolResult {
 	if errors.Is(err, context.Canceled) || (opCtx != nil && errors.Is(opCtx.Err(), context.Canceled)) {
-		return mcp.NewToolResultError(fmt.Sprintf("failed: %s canceled: context canceled", toolName))
+		return mcp.NewToolResultError(fmt.Sprintf("failed: %s canceled: context canceled | action: retry when context is active", toolName))
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) || (opCtx != nil && errors.Is(opCtx.Err(), context.DeadlineExceeded)) {
-		return mcp.NewToolResultError(fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded", toolName))
+		return mcp.NewToolResultError(fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded | action: retry with longer timeout", toolName))
 	}
 
 	return nil
@@ -2233,6 +2233,12 @@ func (s *mcpServer) registerTools() error {
 
 			result, err := runQueryTextScan(opCtx, query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return mcp.NewToolResultError(fmt.Sprintf("failed: %v | action: retry when context is active", err)), nil
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					return mcp.NewToolResultError(fmt.Sprintf("failed: %v | action: retry with longer timeout", err)), nil
+				}
 				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
 			}
 

@@ -411,6 +411,10 @@ func assertToolCallResultContainsDeterministicToolError(t *testing.T, response m
 	if !strings.Contains(string(resultBytes), expectedErrorText) {
 		t.Fatalf("expected tool error to contain exact contract %q, got %s", expectedErrorText, string(resultBytes))
 	}
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
+		t.Fatalf("expected tool error to include actionable marker 'action:', got %s", string(resultBytes))
+	}
 }
 
 func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, response mcp.JSONRPCResponse, toolName string) {
@@ -434,5 +438,9 @@ func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, respons
 	expected := "failed: " + toolName + " deadline exceeded: context deadline exceeded"
 	if !strings.Contains(string(resultBytes), expected) {
 		t.Fatalf("expected %s tool error contract %q, got %s", toolName, expected, string(resultBytes))
+	}
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
+		t.Fatalf("expected %s deadline/timeout error to include actionable marker 'action:', got %s", toolName, string(resultBytes))
 	}
 }

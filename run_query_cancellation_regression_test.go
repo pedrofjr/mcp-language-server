@@ -83,6 +83,8 @@ func TestRegisterTools_RunQuery_ContextCanceledBeforeExecution_ReturnsDeterminis
 	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+canceled:`).Match(resultBytes) {
 		t.Fatalf("expected handler error contract to include 'failed: run_query canceled:', got %s", string(resultBytes))
 	}
+
+	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query canceled-before-execution")
 }
 
 func TestRegisterTools_RunQuery_DeadlineAlreadyExceeded_ReturnsDeterministicDeadlineExceededError(t *testing.T) {
@@ -129,6 +131,8 @@ func TestRegisterTools_RunQuery_DeadlineAlreadyExceeded_ReturnsDeterministicDead
 	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+deadline\s+exceeded:`).Match(resultBytes) {
 		t.Fatalf("expected handler error contract to include 'failed: run_query deadline exceeded:', got %s", string(resultBytes))
 	}
+
+	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query expired-deadline")
 }
 
 func TestRegisterTools_RunQuery_CooperativeCheckpoint_RespectsContextCancellationDuringScan(t *testing.T) {
@@ -214,6 +218,8 @@ func TestRegisterTools_RunQuery_CooperativeCheckpoint_RespectsContextCancellatio
 	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+(canceled|deadline\s+exceeded):`).Match(resultBytes) {
 		t.Fatalf("expected cooperative cancellation to follow handler error contract 'failed: run_query ...', got %s", string(resultBytes))
 	}
+
+	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query cooperative checkpoint cancellation")
 }
 
 func TestRegisterTools_RunQuery_ExplicitTimeout_WhenScannerIsSlow(t *testing.T) {
@@ -315,6 +321,8 @@ func TestRegisterTools_RunQuery_ExplicitTimeout_WhenScannerIsSlow(t *testing.T) 
 	if !regexp.MustCompile(`(?i)failed:\s*run_query\s+deadline\s+exceeded:`).Match(resultBytes) {
 		t.Fatalf("expected explicit local timeout to follow handler error contract 'failed: run_query deadline exceeded:', got %s", string(resultBytes))
 	}
+
+	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query explicit local timeout")
 }
 
 func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTimeout(t *testing.T) {
@@ -421,6 +429,8 @@ func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTi
 		t.Fatalf("expected request deadline precedence to follow handler error contract 'failed: run_query deadline exceeded:', got %s", string(resultBytes))
 	}
 
+	assertRunQueryErrorContainsActionableMarker(t, resultBytes, "run_query request-deadline precedence")
+
 	if elapsed >= 1*time.Second {
 		t.Fatalf("expected run_query to honor the smaller request deadline and fail well before local timeout=%s; elapsed=%s", runQueryHandlerTimeout, elapsed)
 	}
@@ -428,4 +438,12 @@ func TestRegisterTools_RunQuery_RequestDeadlinePrecedence_WhenSmallerThanLocalTi
 
 func formatRunQueryCancellationIndex(i int) string {
 	return fmt.Sprintf("%03d", i)
+}
+
+func assertRunQueryErrorContainsActionableMarker(t *testing.T, resultBytes []byte, scenario string) {
+	t.Helper()
+
+	if !strings.Contains(strings.ToLower(string(resultBytes)), "action:") {
+		t.Fatalf("expected %s error to include actionable marker 'action:', got %s", scenario, string(resultBytes))
+	}
 }

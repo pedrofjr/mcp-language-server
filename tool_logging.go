@@ -13,7 +13,7 @@ import (
 func withLSPGuard(client *lsp.Client, h func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if client == nil {
-			return mcp.NewToolResultError("language server not available"), nil
+			return mcp.NewToolResultError("language server not available | action: initialize language server client"), nil
 		}
 		return h(ctx, req)
 	}
