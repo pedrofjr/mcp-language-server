@@ -24,7 +24,7 @@ func TestMCPServer_WhenLoggingSetLevelIsUnsupported_DoesNotAdvertiseLoggingCapab
 	svc := &mcpServer{
 		ctx: context.Background(),
 	}
-	svc.mcpServer = newMCPServer()
+	svc.mcpServer = newMCPServer(t.TempDir())
 
 	if err := svc.registerTools(); err != nil {
 		t.Fatalf("registerTools() returned error: %v", err)

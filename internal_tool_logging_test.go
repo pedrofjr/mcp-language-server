@@ -67,7 +67,7 @@ func TestWithToolLogging_PropagatesError(t *testing.T) {
 		t.Fatalf("expected %v, got %v", expectedErr, err)
 	}
 	logs := logBuf.String()
-	if !strings.Contains(logs, "tool=failing_tool action=error") {
+	if !strings.Contains(logs, "tool=failing_tool outcome=error") {
 		t.Fatalf("expected error log for failing_tool, got logs: %s", logs)
 	}
 }
@@ -93,11 +93,11 @@ func TestWithToolLogging_ResultErrorWithoutGoError_LogsAsOperationalErrorAndPres
 	}
 
 	logs := logBuf.String()
-	if !strings.Contains(logs, "tool=result_error_tool action=error") {
-		t.Fatalf("expected action=error log when result.IsError=true, got logs: %s", logs)
+	if !strings.Contains(logs, "tool=result_error_tool outcome=error") {
+		t.Fatalf("expected outcome=error log when result.IsError=true, got logs: %s", logs)
 	}
-	if strings.Contains(logs, "tool=result_error_tool action=end") {
-		t.Fatalf("did not expect action=end when result.IsError=true, got logs: %s", logs)
+	if strings.Contains(logs, "tool=result_error_tool outcome=success") {
+		t.Fatalf("did not expect outcome=success when result.IsError=true, got logs: %s", logs)
 	}
 }
 
@@ -152,8 +152,8 @@ func TestWithToolLogging_PrecedenceMatrix(t *testing.T) {
 			}
 
 			logs := logBuf.String()
-			hasError := strings.Contains(logs, "tool=matrix_tool action=error")
-			hasEnd := strings.Contains(logs, "tool=matrix_tool action=end")
+			hasError := strings.Contains(logs, "tool=matrix_tool outcome=error")
+			hasEnd := strings.Contains(logs, "tool=matrix_tool outcome=success")
 
 			if hasError != tt.expectErrorLog {
 				t.Fatalf("expected hasError=%v, got %v. logs=%s", tt.expectErrorLog, hasError, logs)
@@ -184,10 +184,10 @@ func TestWithToolLogging_WhenGoErrorAndResultErrorBothPresent_UsesErrorPathDeter
 	}
 
 	logs := logBuf.String()
-	if !strings.Contains(logs, "tool=double_error_tool action=error") {
+	if !strings.Contains(logs, "tool=double_error_tool outcome=error") {
 		t.Fatalf("expected deterministic error path log, got logs: %s", logs)
 	}
-	if strings.Contains(logs, "tool=double_error_tool action=end") {
+	if strings.Contains(logs, "tool=double_error_tool outcome=success") {
 		t.Fatalf("did not expect success log when both error channels are set, got logs: %s", logs)
 	}
 }
@@ -209,7 +209,7 @@ func TestWithToolLogging_WhenResultAndErrorAreNil_DocumentsCurrentBehavior(t *te
 	}
 
 	logs := logBuf.String()
-	if !strings.Contains(logs, "tool=nil_result_tool action=end") {
-		t.Fatalf("expected current behavior to log action=end for nil result+nil err, got logs: %s", logs)
+	if !strings.Contains(logs, "tool=nil_result_tool outcome=success") {
+		t.Fatalf("expected current behavior to log outcome=success for nil result+nil err, got logs: %s", logs)
 	}
 }

@@ -555,7 +555,7 @@ func deterministicDefinitionReferencesContextError(toolName string, opCtx contex
 		token := opCanceledTokens[toolName]
 		msg := fmt.Sprintf("failed: %s canceled: context canceled | action: retry when context is active", toolName)
 		if token != "" {
-			msg = opErrMsg(token, msg)
+			msg = opErrMsgWithRecovery(token, msg)
 		}
 		return mcp.NewToolResultError(msg)
 	}
@@ -564,7 +564,7 @@ func deterministicDefinitionReferencesContextError(toolName string, opCtx contex
 		token := opDeadlineTokens[toolName]
 		msg := fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded | action: retry with longer timeout", toolName)
 		if token != "" {
-			msg = opErrMsg(token, msg)
+			msg = opErrMsgWithRecovery(token, msg)
 		}
 		return mcp.NewToolResultError(msg)
 	}
@@ -926,36 +926,36 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
-			return mcp.NewToolResultError("filePath must be a string"), nil
+			return OpValidationError("filePath must be a string")
 		}
 
 		// Extract edits array
 		editsArg, ok := request.Params.Arguments["edits"]
 		if !ok {
-			return mcp.NewToolResultError("edits is required"), nil
+			return OpValidationError("edits is required")
 		}
 
 		// Type assert and convert the edits
 		editsArray, ok := editsArg.([]any)
 		if !ok {
-			return mcp.NewToolResultError("edits must be an array"), nil
+			return OpValidationError("edits must be an array")
 		}
 
 		var edits []tools.TextEdit
 		for _, editItem := range editsArray {
 			editMap, ok := editItem.(map[string]any)
 			if !ok {
-				return mcp.NewToolResultError("each edit must be an object"), nil
+				return OpValidationError("each edit must be an object")
 			}
 
 			startLine, ok := editMap["startLine"].(float64)
 			if !ok {
-				return mcp.NewToolResultError("startLine must be a number"), nil
+				return OpValidationError("startLine must be a number")
 			}
 
 			endLine, ok := editMap["endLine"].(float64)
 			if !ok {
-				return mcp.NewToolResultError("endLine must be a number"), nil
+				return OpValidationError("endLine must be a number")
 			}
 
 			newText, _ := editMap["newText"].(string) // newText can be empty
@@ -971,7 +971,7 @@ func (s *mcpServer) registerTools() error {
 		response, err := tools.ApplyTextEdits(s.ctx, s.lspClient, filePath, edits)
 		if err != nil {
 			coreLogger.Error("Failed to apply edits: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to apply edits: %v", err)), nil
+			return OpToolFailedError("edit_file", err.Error(), "verify filePath and edit ranges, then retry")
 		}
 		return mcp.NewToolResultText(response), nil
 	})))
@@ -988,7 +988,7 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		symbolName, ok := request.Params.Arguments["symbolName"].(string)
 		if !ok {
-			return mcp.NewToolResultError("symbolName must be a string"), nil
+			return OpValidationError("symbolName must be a string")
 		}
 
 		coreLogger.Debug("Executing definition for symbol: %s", symbolName)
@@ -1003,7 +1003,7 @@ func (s *mcpServer) registerTools() error {
 			}
 
 			coreLogger.Error("Failed to get definition: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get definition: %v", err)), nil
+			return OpToolFailedError("definition", err.Error(), "verify symbol name and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1020,7 +1020,7 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		symbolName, ok := request.Params.Arguments["symbolName"].(string)
 		if !ok {
-			return mcp.NewToolResultError("symbolName must be a string"), nil
+			return OpValidationError("symbolName must be a string")
 		}
 
 		coreLogger.Debug("Executing references for symbol: %s", symbolName)
@@ -1035,7 +1035,7 @@ func (s *mcpServer) registerTools() error {
 			}
 
 			coreLogger.Error("Failed to find references: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to find references: %v", err)), nil
+			return OpToolFailedError("references", err.Error(), "verify symbol name and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1060,12 +1060,12 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
-			return mcp.NewToolResultError("filePath must be a string"), nil
+			return OpValidationError("filePath must be a string")
 		}
 
 		contextLines, err := parseContextLinesArgument(request.Params.Arguments["contextLines"], 5)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromParseArg(err)
 		}
 
 		showLineNumbers := true // default value
@@ -1077,7 +1077,7 @@ func (s *mcpServer) registerTools() error {
 		text, err := tools.GetDiagnosticsForFile(s.ctx, s.lspClient, filePath, contextLines, showLineNumbers)
 		if err != nil {
 			coreLogger.Error("Failed to get diagnostics: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get diagnostics: %v", err)), nil
+			return OpToolFailedError("diagnostics", err.Error(), "verify filePath and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1167,7 +1167,7 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
-			return mcp.NewToolResultError("filePath must be a string"), nil
+			return OpValidationError("filePath must be a string")
 		}
 
 		// Handle both float64 and int for line and column due to JSON parsing
@@ -1178,7 +1178,7 @@ func (s *mcpServer) registerTools() error {
 		case int:
 			line = v
 		default:
-			return mcp.NewToolResultError("line must be a number"), nil
+			return OpValidationError("line must be a number")
 		}
 
 		switch v := request.Params.Arguments["column"].(type) {
@@ -1187,14 +1187,14 @@ func (s *mcpServer) registerTools() error {
 		case int:
 			column = v
 		default:
-			return mcp.NewToolResultError("column must be a number"), nil
+			return OpValidationError("column must be a number")
 		}
 
 		coreLogger.Debug("Executing hover for file: %s line: %d column: %d", filePath, line, column)
 		text, err := tools.GetHoverInfo(s.ctx, s.lspClient, filePath, line, column)
 		if err != nil {
 			coreLogger.Error("Failed to get hover information: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get hover information: %v", err)), nil
+			return OpToolFailedError("hover", err.Error(), "verify filePath, line/column and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1223,12 +1223,12 @@ func (s *mcpServer) registerTools() error {
 		// Extract arguments
 		filePath, ok := request.Params.Arguments["filePath"].(string)
 		if !ok {
-			return mcp.NewToolResultError("filePath must be a string"), nil
+			return OpValidationError("filePath must be a string")
 		}
 
 		newName, ok := request.Params.Arguments["newName"].(string)
 		if !ok {
-			return mcp.NewToolResultError("newName must be a string"), nil
+			return OpValidationError("newName must be a string")
 		}
 
 		// Handle both float64 and int for line and column due to JSON parsing
@@ -1239,7 +1239,7 @@ func (s *mcpServer) registerTools() error {
 		case int:
 			line = v
 		default:
-			return mcp.NewToolResultError("line must be a number"), nil
+			return OpValidationError("line must be a number")
 		}
 
 		switch v := request.Params.Arguments["column"].(type) {
@@ -1248,14 +1248,14 @@ func (s *mcpServer) registerTools() error {
 		case int:
 			column = v
 		default:
-			return mcp.NewToolResultError("column must be a number"), nil
+			return OpValidationError("column must be a number")
 		}
 
 		coreLogger.Debug("Executing rename_symbol for file: %s line: %d column: %d newName: %s", filePath, line, column, newName)
 		text, err := tools.RenameSymbol(s.ctx, s.lspClient, filePath, line, column, newName)
 		if err != nil {
 			coreLogger.Error("Failed to rename symbol: %v", err)
-			return mcp.NewToolResultError(fmt.Sprintf("failed to rename symbol: %v", err)), nil
+			return OpToolFailedError("rename_symbol", err.Error(), "verify position, newName and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1268,20 +1268,20 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Substring to filter symbols (case-insensitive). Leave empty to list all exported symbols."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("workspace_symbols", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			queryRaw := req.Params.Arguments["query"]
 			if queryRaw != nil {
 				if _, ok := queryRaw.(string); !ok {
-					return mcp.NewToolResultError("query must be a string"), nil
+					return OpValidationError("query must be a string")
 				}
 			}
 			query, _ := queryRaw.(string)
 			result, err := tools.GetWorkspaceSymbols(s.ctx, s.lspClient, query)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("workspace_symbols", err.Error(), "check LSP availability and query value, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// get_symbols_overview
@@ -1292,20 +1292,20 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional filter string forwarded to workspace/symbol. Whitespace-only values are trimmed to empty."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("get_symbols_overview", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			queryRaw := req.Params.Arguments["query"]
 			if queryRaw != nil {
 				if _, ok := queryRaw.(string); !ok {
-					return mcp.NewToolResultError("query must be a string"), nil
+					return OpValidationError("query must be a string")
 				}
 			}
 			query, _ := queryRaw.(string)
 			result, err := tools.GetSymbolsOverview(s.ctx, s.lspClient, query)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("get_symbols_overview", err.Error(), "check LSP availability and query value, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// ast_summary
@@ -1317,17 +1317,17 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("File URI of the Delphi .pas file (e.g. file:///path/to/Unit1.pas)"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("ast_summary", withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			uri, ok := req.Params.Arguments["uri"].(string)
 			if !ok || uri == "" {
-				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+				return OpValidationError("uri must be a non-empty string")
 			}
 			result, err := tools.GetAstSummary(s.ctx, s.lspClient, uri)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("ast_summary", err.Error(), "verify uri points to a Delphi source file and retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		})),
 	)
 
 	// dependency_tree
@@ -1342,28 +1342,28 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("'imports' (default) to show dependencies, or 'importedBy' for reverse dependencies"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("dependency_tree", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			uri, ok := req.Params.Arguments["uri"].(string)
 			if !ok || uri == "" {
-				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+				return OpValidationError("uri must be a non-empty string")
 			}
 			direction := ""
 			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
 				directionValue, ok := directionRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("direction must be a string: 'imports' or 'importedBy'"), nil
+					return OpValidationError("direction must be a string: 'imports' or 'importedBy'")
 				}
 				direction = directionValue
 			}
 			if direction != "" && direction != "imports" && direction != "importedBy" {
-				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+				return OpValidationError("direction must be 'imports' or 'importedBy'")
 			}
 			result, err := tools.GetDependencyTree(s.ctx, s.lspClient, uri, direction)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("dependency_tree", err.Error(), "verify uri and LSP graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// graph_neighbors
@@ -1381,42 +1381,42 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Neighborhood direction: 'imports' (default) or 'importedBy'."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("graph_neighbors", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			uri, ok := req.Params.Arguments["uri"].(string)
 			if !ok || strings.TrimSpace(uri) == "" {
-				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+				return OpValidationError("uri must be a non-empty string")
 			}
 
 			relationType := ""
 			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
 				relationTypeValue, ok := relationTypeRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+					return OpValidationError("relationType must be 'uses_unit'")
 				}
 				relationType = strings.TrimSpace(relationTypeValue)
 			}
 			if relationType != "" && relationType != "uses_unit" {
-				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				return OpValidationError("relationType must be 'uses_unit'")
 			}
 
 			direction := ""
 			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
 				directionValue, ok := directionRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+					return OpValidationError("direction must be 'imports' or 'importedBy'")
 				}
 				direction = strings.TrimSpace(directionValue)
 			}
 			if direction != "" && direction != "imports" && direction != "importedBy" {
-				return mcp.NewToolResultError("direction must be 'imports' or 'importedBy'"), nil
+				return OpValidationError("direction must be 'imports' or 'importedBy'")
 			}
 
 			result, err := tools.GetGraphNeighbors(s.ctx, s.lspClient, uri, relationType, direction)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("graph_neighbors", err.Error(), "verify uri, relationType and direction, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// graph_node
@@ -1431,30 +1431,30 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Relation kind. Only 'uses_unit' is currently supported."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("graph_node", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			uri, ok := req.Params.Arguments["uri"].(string)
 			if !ok || strings.TrimSpace(uri) == "" {
-				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+				return OpValidationError("uri must be a non-empty string")
 			}
 
 			relationType := ""
 			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
 				relationTypeValue, ok := relationTypeRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+					return OpValidationError("relationType must be 'uses_unit'")
 				}
 				relationType = strings.TrimSpace(relationTypeValue)
 			}
 			if relationType != "" && relationType != "uses_unit" {
-				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				return OpValidationError("relationType must be 'uses_unit'")
 			}
 
 			result, err := tools.GetGraphNode(s.ctx, s.lspClient, uri, relationType)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("graph_node", err.Error(), "verify uri and relationType, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// graph_query
@@ -1475,34 +1475,34 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Traversal depth as an integer >= 0. Defaults to 1."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("graph_query", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			uri, ok := req.Params.Arguments["uri"].(string)
 			if !ok || strings.TrimSpace(uri) == "" {
-				return mcp.NewToolResultError("uri must be a non-empty string"), nil
+				return OpValidationError("uri must be a non-empty string")
 			}
 
 			relationType := ""
 			if relationTypeRaw, exists := req.Params.Arguments["relationType"]; exists && relationTypeRaw != nil {
 				relationTypeValue, ok := relationTypeRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+					return OpValidationError("relationType must be 'uses_unit'")
 				}
 				relationType = strings.TrimSpace(relationTypeValue)
 			}
 			if relationType != "" && relationType != "uses_unit" {
-				return mcp.NewToolResultError("relationType must be 'uses_unit'"), nil
+				return OpValidationError("relationType must be 'uses_unit'")
 			}
 
 			direction := ""
 			if directionRaw, exists := req.Params.Arguments["direction"]; exists && directionRaw != nil {
 				directionValue, ok := directionRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("direction must be 'imports', 'importedBy' or 'both'"), nil
+					return OpValidationError("direction must be 'imports', 'importedBy' or 'both'")
 				}
 				direction = strings.TrimSpace(directionValue)
 			}
 			if direction != "" && direction != "imports" && direction != "importedBy" && direction != "both" {
-				return mcp.NewToolResultError("direction must be 'imports', 'importedBy' or 'both'"), nil
+				return OpValidationError("direction must be 'imports', 'importedBy' or 'both'")
 			}
 
 			depth := 1
@@ -1514,14 +1514,14 @@ func (s *mcpServer) registerTools() error {
 				case int:
 					depthNumber = float64(v)
 				default:
-					return mcp.NewToolResultError("depth must be an integer"), nil
+					return OpValidationError("depth must be an integer")
 				}
 
 				if depthNumber != math.Trunc(depthNumber) {
-					return mcp.NewToolResultError("depth must be an integer"), nil
+					return OpValidationError("depth must be an integer")
 				}
 				if depthNumber < 0 {
-					return mcp.NewToolResultError("depth must be greater than or equal to 0"), nil
+					return OpValidationError("depth must be greater than or equal to 0")
 				}
 
 				depth = int(depthNumber)
@@ -1529,10 +1529,10 @@ func (s *mcpServer) registerTools() error {
 
 			result, err := tools.GetGraphQuery(s.ctx, s.lspClient, uri, relationType, direction, depth)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("graph_query", err.Error(), "verify uri, direction, depth and LSP graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// call_graph
@@ -1547,15 +1547,15 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional positive integer depth for traversal. Defaults to 1 when omitted."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("call_graph", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			symbolName, ok := req.Params.Arguments["symbolName"].(string)
 			if !ok {
-				return mcp.NewToolResultError("symbolName must be a string"), nil
+				return OpValidationError("symbolName must be a string")
 			}
 
 			symbolName = strings.TrimSpace(symbolName)
 			if symbolName == "" {
-				return mcp.NewToolResultError("symbolName must be a non-empty string"), nil
+				return OpValidationError("symbolName must be a non-empty string")
 			}
 
 			depth := 1
@@ -1567,14 +1567,14 @@ func (s *mcpServer) registerTools() error {
 				case int:
 					depthNumber = float64(v)
 				default:
-					return mcp.NewToolResultError("depth must be a number"), nil
+					return OpValidationError("depth must be a number")
 				}
 
 				if depthNumber <= 0 {
-					return mcp.NewToolResultError("depth must be a positive integer"), nil
+					return OpValidationError("depth must be a positive integer")
 				}
 				if depthNumber != math.Trunc(depthNumber) {
-					return mcp.NewToolResultError("depth must be an integer"), nil
+					return OpValidationError("depth must be an integer")
 				}
 
 				depth = int(depthNumber)
@@ -1582,10 +1582,10 @@ func (s *mcpServer) registerTools() error {
 
 			result, err := tools.GetCallGraph(s.ctx, s.lspClient, symbolName, depth)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("call_graph", err.Error(), "verify symbolName and LSP call graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// semantic_search
@@ -1606,17 +1606,17 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional positive integer result limit. Defaults to 20."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("semantic_search", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			query, ok := req.Params.Arguments["query"].(string)
 			if !ok || strings.TrimSpace(query) == "" {
-				return mcp.NewToolResultError("query must be a non-empty string"), nil
+				return OpValidationError("query must be a non-empty string")
 			}
 
 			scope := "workspace"
 			if scopeRaw, exists := req.Params.Arguments["scope"]; exists && scopeRaw != nil {
 				scopeText, ok := scopeRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("scope must be 'workspace' or 'file'"), nil
+					return OpValidationError("scope must be 'workspace' or 'file'")
 				}
 				scopeText = strings.TrimSpace(scopeText)
 				if scopeText != "" {
@@ -1625,20 +1625,20 @@ func (s *mcpServer) registerTools() error {
 			}
 
 			if scope != "workspace" && scope != "file" {
-				return mcp.NewToolResultError("scope must be 'workspace' or 'file'"), nil
+				return OpValidationError("scope must be 'workspace' or 'file'")
 			}
 
 			uri := ""
 			if uriRaw, exists := req.Params.Arguments["uri"]; exists && uriRaw != nil {
 				uriText, ok := uriRaw.(string)
 				if !ok {
-					return mcp.NewToolResultError("uri must be a string"), nil
+					return OpValidationError("uri must be a string")
 				}
 				uri = strings.TrimSpace(uriText)
 			}
 
 			if scope == "file" && uri == "" {
-				return mcp.NewToolResultError("uri is required when scope='file'"), nil
+				return OpValidationError("uri is required when scope='file'")
 			}
 
 			limit := 20
@@ -1650,11 +1650,11 @@ func (s *mcpServer) registerTools() error {
 				case int:
 					limitNumber = float64(v)
 				default:
-					return mcp.NewToolResultError("limit must be a positive integer"), nil
+					return OpValidationError("limit must be a positive integer")
 				}
 
 				if limitNumber <= 0 || limitNumber != math.Trunc(limitNumber) {
-					return mcp.NewToolResultError("limit must be a positive integer"), nil
+					return OpValidationError("limit must be a positive integer")
 				}
 
 				limit = int(limitNumber)
@@ -1662,10 +1662,10 @@ func (s *mcpServer) registerTools() error {
 
 			result, err := tools.GetSemanticSearch(s.ctx, s.lspClient, query, scope, uri, limit)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("semantic_search", err.Error(), "verify query, scope/uri and LSP semantic index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// code_actions
@@ -1693,11 +1693,50 @@ func (s *mcpServer) registerTools() error {
 				mcp.DefaultBool(false),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			filePath, ok := req.Params.Arguments["filePath"].(string)
-			if !ok {
-				return mcp.NewToolResultError("filePath must be a string"), nil
+		withToolLogging("code_actions", withPreToolValidation(func(req mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
+			if _, ok := req.Params.Arguments["filePath"].(string); !ok {
+				result, _ := OpValidationError("filePath must be a string")
+				return result, true
 			}
+
+			switch req.Params.Arguments["line"].(type) {
+			case float64, int:
+			default:
+				result, _ := OpValidationError("line must be a number")
+				return result, true
+			}
+
+			switch req.Params.Arguments["column"].(type) {
+			case float64, int:
+			default:
+				result, _ := OpValidationError("column must be a number")
+				return result, true
+			}
+
+			if onlyRaw, exists := req.Params.Arguments["only"]; exists && onlyRaw != nil {
+				onlyArr, ok := onlyRaw.([]any)
+				if !ok {
+					result, _ := OpValidationError("only must be an array of strings")
+					return result, true
+				}
+				for _, item := range onlyArr {
+					if _, ok := item.(string); !ok {
+						result, _ := OpValidationError("only must be an array of strings")
+						return result, true
+					}
+				}
+			}
+
+			if inclRaw, exists := req.Params.Arguments["includeDiagnostics"]; exists && inclRaw != nil {
+				if _, ok := inclRaw.(bool); !ok {
+					result, _ := OpValidationError("includeDiagnostics must be a boolean")
+					return result, true
+				}
+			}
+
+			return nil, false
+		}, withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath := req.Params.Arguments["filePath"].(string)
 
 			var line int
 			switch v := req.Params.Arguments["line"].(type) {
@@ -1705,8 +1744,6 @@ func (s *mcpServer) registerTools() error {
 				line = int(v)
 			case int:
 				line = v
-			default:
-				return mcp.NewToolResultError("line must be a number"), nil
 			}
 
 			var column int
@@ -1715,40 +1752,26 @@ func (s *mcpServer) registerTools() error {
 				column = int(v)
 			case int:
 				column = v
-			default:
-				return mcp.NewToolResultError("column must be a number"), nil
 			}
 
 			var only []string
 			if onlyRaw, exists := req.Params.Arguments["only"]; exists && onlyRaw != nil {
-				onlyArr, ok := onlyRaw.([]any)
-				if !ok {
-					return mcp.NewToolResultError("only must be an array of strings"), nil
-				}
-				for _, item := range onlyArr {
-					s, ok := item.(string)
-					if !ok {
-						return mcp.NewToolResultError("only must be an array of strings"), nil
-					}
-					only = append(only, s)
+				for _, item := range onlyRaw.([]any) {
+					only = append(only, item.(string))
 				}
 			}
 
 			includeDiagnostics := false
 			if inclRaw, exists := req.Params.Arguments["includeDiagnostics"]; exists && inclRaw != nil {
-				inclBool, ok := inclRaw.(bool)
-				if !ok {
-					return mcp.NewToolResultError("includeDiagnostics must be a boolean"), nil
-				}
-				includeDiagnostics = inclBool
+				includeDiagnostics = inclRaw.(bool)
 			}
 
 			text, err := tools.GetCodeActions(s.ctx, s.lspClient, filePath, line, column, only, includeDiagnostics)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to get code actions: %v", err)), nil
+				return OpToolFailedError("code_actions", err.Error(), "verify filePath, position and LSP availability, then retry")
 			}
 			return mcp.NewToolResultText(text), nil
-		},
+		}))),
 	)
 
 	// replace_symbol_body
@@ -1759,25 +1782,25 @@ func (s *mcpServer) registerTools() error {
 			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar' or 'Bar'")),
 			mcp.WithString("newBody", mcp.Required(), mcp.Description("Replacement text for the begin..end block (include begin and end lines)")),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("replace_symbol_body", withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			filePath, ok := req.Params.Arguments["filePath"].(string)
 			if !ok {
-				return mcp.NewToolResultError("filePath must be a string"), nil
+				return OpValidationError("filePath must be a string")
 			}
 			symbolName, ok := req.Params.Arguments["symbolName"].(string)
 			if !ok {
-				return mcp.NewToolResultError("symbolName must be a string"), nil
+				return OpValidationError("symbolName must be a string")
 			}
 			newBody, ok := req.Params.Arguments["newBody"].(string)
 			if !ok {
-				return mcp.NewToolResultError("newBody must be a string"), nil
+				return OpValidationError("newBody must be a string")
 			}
 			result, err := tools.ReplaceSymbolBody(s.ctx, s.lspClient, filePath, symbolName, newBody)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("replace_symbol_body failed: %v", err)), nil
+				return OpToolFailedError("replace_symbol_body", err.Error(), "verify symbol exists and newBody is valid, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		})),
 	)
 
 	// insert_after_symbol
@@ -1788,25 +1811,25 @@ func (s *mcpServer) registerTools() error {
 			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar'")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Text to insert after the symbol")),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("insert_after_symbol", withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			filePath, ok := req.Params.Arguments["filePath"].(string)
 			if !ok {
-				return mcp.NewToolResultError("filePath must be a string"), nil
+				return OpValidationError("filePath must be a string")
 			}
 			symbolName, ok := req.Params.Arguments["symbolName"].(string)
 			if !ok {
-				return mcp.NewToolResultError("symbolName must be a string"), nil
+				return OpValidationError("symbolName must be a string")
 			}
 			text, ok := req.Params.Arguments["text"].(string)
 			if !ok {
-				return mcp.NewToolResultError("text must be a string"), nil
+				return OpValidationError("text must be a string")
 			}
 			result, err := tools.InsertAfterSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("insert_after_symbol failed: %v", err)), nil
+				return OpToolFailedError("insert_after_symbol", err.Error(), "verify symbol exists and text payload, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		})),
 	)
 
 	// insert_before_symbol
@@ -1817,29 +1840,29 @@ func (s *mcpServer) registerTools() error {
 			mcp.WithString("symbolName", mcp.Required(), mcp.Description("Symbol name, e.g. 'TFoo.Bar'")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Text to insert before the symbol")),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("insert_before_symbol", withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			filePath, ok := req.Params.Arguments["filePath"].(string)
 			if !ok {
-				return mcp.NewToolResultError("filePath must be a string"), nil
+				return OpValidationError("filePath must be a string")
 			}
 			symbolName, ok := req.Params.Arguments["symbolName"].(string)
 			if !ok {
-				return mcp.NewToolResultError("symbolName must be a string"), nil
+				return OpValidationError("symbolName must be a string")
 			}
 			text, ok := req.Params.Arguments["text"].(string)
 			if !ok {
-				return mcp.NewToolResultError("text must be a string"), nil
+				return OpValidationError("text must be a string")
 			}
 			result, err := tools.InsertBeforeSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("insert_before_symbol failed: %v", err)), nil
+				return OpToolFailedError("insert_before_symbol", err.Error(), "verify symbol exists and text payload, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		})),
 	)
 
 	// === Sprint 2 - Memoria ===
-	memoryWriteHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryWriteHandler := withToolLogging("memory_write", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		title, _ := request.Params.Arguments["title"].(string)
 		content, _ := request.Params.Arguments["content"].(string)
 		tagsStr, _ := request.Params.Arguments["tags"].(string)
@@ -1855,25 +1878,32 @@ func (s *mcpServer) registerTools() error {
 
 		id, err := tools.MemoryWrite(title, content, tags)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromMemory("memory_write", err)
 		}
 		return mcp.NewToolResultText("Entrada criada com ID: " + id), nil
-	}
+	})
 
-	memoryReadHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryReadHandler := withToolLogging("memory_read", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		entry, err := tools.MemoryRead(id)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromMemory("memory_read", err)
 		}
 		return mcp.NewToolResultText(fmt.Sprintf("# %s\n\n%s\nTags: %s", entry.Title, entry.Content, strings.Join(entry.Tags, ", "))), nil
-	}
+	})
 
-	memoryListHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		tag, _ := request.Params.Arguments["tag"].(string)
+	memoryListHandler := withToolLogging("memory_list", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var tag string
+		if rawTag, ok := request.Params.Arguments["tag"]; ok && rawTag != nil {
+			parsedTag, ok := rawTag.(string)
+			if !ok {
+				return OpValidationError("tag must be a string")
+			}
+			tag = parsedTag
+		}
 		entries, err := tools.MemoryList(tag)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromMemory("memory_list", err)
 		}
 		if len(entries) == 0 {
 			return mcp.NewToolResultText("Nenhuma entrada de memoria encontrada"), nil
@@ -1889,24 +1919,24 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		return mcp.NewToolResultText(builder.String()), nil
-	}
+	})
 
-	memoryEditHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryEditHandler := withToolLogging("memory_edit", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		content, _ := request.Params.Arguments["content"].(string)
 		if err := tools.MemoryEdit(id, content); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromMemory("memory_edit", err)
 		}
 		return mcp.NewToolResultText("Entrada atualizada com sucesso"), nil
-	}
+	})
 
-	memoryDeleteHandler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	memoryDeleteHandler := withToolLogging("memory_delete", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, _ := request.Params.Arguments["id"].(string)
 		if err := tools.MemoryDelete(id); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromMemory("memory_delete", err)
 		}
 		return mcp.NewToolResultText("Entrada removida com sucesso"), nil
-	}
+	})
 
 	s.mcpServer.AddTool(mcp.NewTool("memory_write",
 		mcp.WithDescription("Cria uma entrada de memoria persistente para o agente"),
@@ -1970,17 +2000,17 @@ func (s *mcpServer) registerTools() error {
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo .pas")),
 		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome do simbolo a remover")),
 		mcp.WithBoolean("force", mcp.Description("true para remover mesmo com referencias existentes")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	), withToolLogging("safe_delete_symbol", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 		force, _ := request.Params.Arguments["force"].(bool)
 
 		result, err := tools.SafeDeleteSymbol(s.ctx, s.lspClient, filePath, symbolName, force)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("safe_delete_symbol", err, "verify symbol has no blocking references or set force=true")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	})))
 
 	// Sprint 3: analyze_complexity
 	s.mcpServer.AddTool(
@@ -1995,15 +2025,15 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Symbol name to analyze"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("analyze_complexity", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			src, ok := req.Params.Arguments["src"].(string)
 			if !ok {
-				return mcp.NewToolResultError("src must be a string"), nil
+				return OpValidationError("src must be a string")
 			}
 
 			symbolName, ok := req.Params.Arguments["symbol_name"].(string)
 			if !ok {
-				return mcp.NewToolResultError("symbol_name must be a string"), nil
+				return OpValidationError("symbol_name must be a string")
 			}
 
 			result := tools.AnalyzeComplexity(src, symbolName)
@@ -2013,7 +2043,7 @@ func (s *mcpServer) registerTools() error {
 
 			return mcp.NewToolResultText(fmt.Sprintf(`{"symbol":"%s","complexity":%d,"rating":"%s"}`,
 				result.SymbolName, result.Score, result.Rating)), nil
-		},
+		}),
 	)
 
 	// Sprint 3: find_similar_code
@@ -2035,15 +2065,15 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Sliding window size in lines [1, 200], default 10"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("find_similar_code", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			src, ok := req.Params.Arguments["src"].(string)
 			if !ok {
-				return mcp.NewToolResultError("src must be a string"), nil
+				return OpValidationError("src must be a string")
 			}
 
 			query, ok := req.Params.Arguments["query"].(string)
 			if !ok {
-				return mcp.NewToolResultError("query must be a string"), nil
+				return OpValidationError("query must be a string")
 			}
 
 			threshold := 0.3
@@ -2054,11 +2084,11 @@ func (s *mcpServer) registerTools() error {
 				case int:
 					threshold = float64(value)
 				default:
-					return mcp.NewToolResultError("threshold must be a number"), nil
+					return OpValidationError("threshold must be a number")
 				}
 
 				if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0.0 || threshold > 1.0 {
-					return mcp.NewToolResultError("threshold must be a finite number between 0.0 and 1.0"), nil
+					return OpValidationError("threshold must be a finite number between 0.0 and 1.0")
 				}
 			}
 
@@ -2067,20 +2097,20 @@ func (s *mcpServer) registerTools() error {
 				switch value := raw.(type) {
 				case float64:
 					if math.IsNaN(value) || math.IsInf(value, 0) {
-						return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+						return OpValidationError("window_lines must be an integer between 1 and 200")
 					}
 					if value != math.Trunc(value) {
-						return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+						return OpValidationError("window_lines must be an integer between 1 and 200")
 					}
 					windowLines = int(value)
 				case int:
 					windowLines = value
 				default:
-					return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+					return OpValidationError("window_lines must be an integer between 1 and 200")
 				}
 
 				if windowLines < 1 || windowLines > 200 {
-					return mcp.NewToolResultError("window_lines must be an integer between 1 and 200"), nil
+					return OpValidationError("window_lines must be an integer between 1 and 200")
 				}
 			}
 
@@ -2090,10 +2120,10 @@ func (s *mcpServer) registerTools() error {
 			})
 			data, err := json.Marshal(blocks)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("failed to marshal similar blocks: %v", err)), nil
+				return OpToolFailedError("find_similar_code", err.Error(), "retry with smaller src/query payload")
 			}
 			return mcp.NewToolResultText(string(data)), nil
-		},
+		}),
 	)
 
 	// Sprint 3: activate_project
@@ -2105,18 +2135,18 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Path to the Delphi project directory"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("activate_project", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			dir, ok := req.Params.Arguments["dir"].(string)
 			if !ok {
-				return mcp.NewToolResultError("dir must be a string"), nil
+				return OpValidationError("dir must be a string")
 			}
 
 			result, err := tools.ActivateProject(dir)
 			if err != nil {
-				return mcp.NewToolResultError("error: " + err.Error()), nil
+				return OpToolFailedError("activate_project", err.Error(), "verify dir points to a Delphi project root, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 
 	// Sprint 3: build_query
@@ -2131,23 +2161,23 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional symbol name to filter"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("build_query", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			nodeType, ok := req.Params.Arguments["node_type"].(string)
 			if !ok {
-				return mcp.NewToolResultError("node_type must be a string"), nil
+				return OpValidationError("node_type must be a string")
 			}
 
 			symbol := ""
 			if raw, exists := req.Params.Arguments["symbol"]; exists && raw != nil {
 				value, ok := raw.(string)
 				if !ok {
-					return mcp.NewToolResultError("symbol must be a string"), nil
+					return OpValidationError("symbol must be a string")
 				}
 				symbol = value
 			}
 
 			return mcp.NewToolResultText(tools.BuildQuery(nodeType, symbol)), nil
-		},
+		}),
 	)
 
 	// Sprint 3: adapt_query
@@ -2163,19 +2193,19 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Target dialect: delphi6, pascal, fpc"),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("adapt_query", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			base, ok := req.Params.Arguments["base"].(string)
 			if !ok {
-				return mcp.NewToolResultError("base must be a string"), nil
+				return OpValidationError("base must be a string")
 			}
 
 			dialect, ok := req.Params.Arguments["dialect"].(string)
 			if !ok {
-				return mcp.NewToolResultError("dialect must be a string"), nil
+				return OpValidationError("dialect must be a string")
 			}
 
 			return mcp.NewToolResultText(tools.AdaptQuery(base, dialect)), nil
-		},
+		}),
 	)
 
 	// Sprint 3: run_query
@@ -2198,12 +2228,12 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Maximum number of matches to return. Must be > 0."),
 			),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("run_query", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			query := ""
 			if raw, exists := req.Params.Arguments["query"]; exists && raw != nil {
 				value, ok := raw.(string)
 				if !ok {
-					return mcp.NewToolResultError("query must be a string"), nil
+					return OpValidationError("query must be a string")
 				}
 				query = strings.TrimSpace(value)
 			}
@@ -2212,20 +2242,20 @@ func (s *mcpServer) registerTools() error {
 			if raw, exists := req.Params.Arguments["node_type"]; exists && raw != nil {
 				value, ok := raw.(string)
 				if !ok {
-					return mcp.NewToolResultError("node_type must be a string"), nil
+					return OpValidationError("node_type must be a string")
 				}
 				nodeType = strings.TrimSpace(value)
 			}
 
 			if query == "" && nodeType == "" {
-				return mcp.NewToolResultError("query or node_type must be provided"), nil
+				return OpValidationError("query or node_type must be provided")
 			}
 
 			filePath := ""
 			if raw, exists := req.Params.Arguments["filePath"]; exists && raw != nil {
 				value, ok := raw.(string)
 				if !ok {
-					return mcp.NewToolResultError("filePath must be a string"), nil
+					return OpValidationError("filePath must be a string")
 				}
 				filePath = value
 			}
@@ -2234,18 +2264,18 @@ func (s *mcpServer) registerTools() error {
 			if raw, exists := req.Params.Arguments["strictFilePath"]; exists && raw != nil {
 				value, ok := raw.(bool)
 				if !ok {
-					return mcp.NewToolResultError("strictFilePath must be a boolean"), nil
+					return OpValidationError("strictFilePath must be a boolean")
 				}
 				strictFilePath = value
 			}
 
 			if strictFilePath && strings.TrimSpace(filePath) == "" {
-				return mcp.NewToolResultError("strictFilePath=true requires filePath"), nil
+				return OpValidationError("strictFilePath=true requires filePath")
 			}
 
 			limit, err := parseOptionalPositiveIntegerArgument(req.Params.Arguments["limit"], 20, "limit")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return OpErrorFromParseArg(err)
 			}
 
 			opCtx, cancel := context.WithTimeout(ctx, runQueryHandlerTimeout)
@@ -2254,108 +2284,117 @@ func (s *mcpServer) registerTools() error {
 			result, err := runQueryTextScan(opCtx, query, nodeType, filePath, strictFilePath, limit)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
-					return mcp.NewToolResultError(opErrMsg(OpRunQueryCanceled, fmt.Sprintf("failed: %v | action: retry when context is active", err))), nil
+					return mcp.NewToolResultError(opErrMsgWithRecovery(OpRunQueryCanceled, fmt.Sprintf("failed: %v | action: retry when context is active", err))), nil
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
-					return mcp.NewToolResultError(opErrMsg(OpRunQueryDeadline, fmt.Sprintf("failed: %v | action: retry with longer timeout", err))), nil
+					return mcp.NewToolResultError(opErrMsgWithRecovery(OpRunQueryDeadline, fmt.Sprintf("failed: %v | action: retry with longer timeout", err))), nil
 				}
-				return mcp.NewToolResultError(fmt.Sprintf("failed: %v", err)), nil
+				return OpToolFailedError("run_query", err.Error(), "verify query/node_type/filePath and workspace scan scope, then retry")
 			}
 
 			return mcp.NewToolResultText(result), nil
-		},
+		}),
 	)
 	s.mcpServer.AddTool(mcp.NewTool("get_diagnostics_for_symbol",
 		mcp.WithDescription("Retorna diagnosticos do LSP relevantes para um simbolo"),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo .pas")),
 		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome do simbolo")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	), withToolLogging("get_diagnostics_for_symbol", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 
 		result, err := tools.GetDiagnosticsForSymbol(s.ctx, s.lspClient, filePath, symbolName)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("get_diagnostics_for_symbol", err, "verify filePath and symbolName, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	})))
 
 	s.mcpServer.AddTool(mcp.NewTool("find_implementations",
 		mcp.WithDescription("Encontra classes que implementam uma interface Delphi"),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Arquivo onde a interface esta declarada")),
 		mcp.WithString("symbolName", mcp.Required(), mcp.Description("Nome da interface")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	), withToolLogging("find_implementations", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 
 		result, err := tools.FindImplementations(s.ctx, s.lspClient, filePath, symbolName, s.config.workspaceDir)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("find_implementations", err, "verify interface symbol and workspace, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	})))
 
 	s.mcpServer.AddTool(mcp.NewTool("get_node_at_position",
 		mcp.WithDescription("Retorna o token e contexto textual em uma posicao do arquivo"),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Caminho absoluto do arquivo")),
 		mcp.WithNumber("line", mcp.Required(), mcp.Description("Numero de linha (1-indexado)")),
 		mcp.WithNumber("column", mcp.Required(), mcp.Description("Numero de coluna (1-indexado)")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	), withToolLogging("get_node_at_position", withPreToolValidation(func(request mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
+		if _, err := parsePositiveIntegerArgument(request.Params.Arguments["line"], "line"); err != nil {
+			result, _ := OpErrorFromParseArg(err)
+			return result, true
+		}
+		if _, err := parsePositiveIntegerArgument(request.Params.Arguments["column"], "column"); err != nil {
+			result, _ := OpErrorFromParseArg(err)
+			return result, true
+		}
+		return nil, false
+	}, withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
-		line, err := parsePositiveIntegerArgument(request.Params.Arguments["line"], "line")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		column, err := parsePositiveIntegerArgument(request.Params.Arguments["column"], "column")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
+		line, _ := parsePositiveIntegerArgument(request.Params.Arguments["line"], "line")
+		column, _ := parsePositiveIntegerArgument(request.Params.Arguments["column"], "column")
 
 		result, err := tools.GetNodeAtPosition(s.ctx, s.lspClient, filePath, line, column)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("get_node_at_position", err, "verify filePath and line/column, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	}))))
 
 	s.mcpServer.AddTool(mcp.NewTool("get_node_types",
 		mcp.WithDescription("Retorna a lista de tipos de no suportados pelo Delphi 6"),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	), withToolLogging("get_node_types", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := tools.GetNodeTypes(s.ctx, s.lspClient)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("get_node_types", err, "verify LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	})))
 
 	s.mcpServer.AddTool(mcp.NewTool("onboarding",
 		mcp.WithDescription("Escaneia estrutura do projeto Delphi e retorna inventario de units, forms e entry point"),
 		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
 		mcp.WithString("context", mcp.Description("Chave de contexto de onboarding (opcional; default quando omitido)")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		projectPath, _ := request.Params.Arguments["projectPath"].(string)
+	), withToolLogging("onboarding", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		projectPath, ok := request.Params.Arguments["projectPath"].(string)
+		if !ok || strings.TrimSpace(projectPath) == "" {
+			return OpValidationError("projectPath must be a non-empty string")
+		}
 		contextKey, err := parseOptionalContextArgument(request.Params.Arguments["context"])
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromParseArg(err)
 		}
 
 		result, err := tools.PerformOnboardingWithContext(projectPath, contextKey)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromDomain("onboarding", err, "verify projectPath and workspace layout, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
-	})
+	}))
 
 	s.mcpServer.AddTool(mcp.NewTool("check_onboarding_performed",
 		mcp.WithDescription("Verifica se o onboarding ja foi executado para este projeto"),
 		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
 		mcp.WithString("context", mcp.Description("Chave de contexto de onboarding (opcional; default quando omitido)")),
-	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		projectPath, _ := request.Params.Arguments["projectPath"].(string)
+	), withToolLogging("check_onboarding_performed", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		projectPath, ok := request.Params.Arguments["projectPath"].(string)
+		if !ok || strings.TrimSpace(projectPath) == "" {
+			return OpValidationError("projectPath must be a non-empty string")
+		}
 		contextKey, err := parseOptionalContextArgument(request.Params.Arguments["context"])
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return OpErrorFromParseArg(err)
 		}
 
 		performed, at := tools.CheckOnboardingPerformedWithContext(projectPath, contextKey)
@@ -2380,7 +2419,7 @@ func (s *mcpServer) registerTools() error {
 		performedMessage := fmt.Sprintf("Onboarding executado em: %s%s", at.Format(time.RFC3339), contextSuffix)
 		performedMessage += ". Proximo passo: execute get_symbols_overview para mapear unidades/simbolos."
 		return mcp.NewToolResultText(performedMessage), nil
-	})
+	}))
 
 	coreLogger.Info("Successfully registered all MCP tools")
 	return nil

@@ -3439,8 +3439,12 @@ func TestRegisterTools_FindSimilarCode_AcceptsWindowLinesBoundaryValues(t *testi
 func newRegisteredTestMCPServer(t *testing.T) *mcpServer {
 	t.Helper()
 
-	svc := &mcpServer{ctx: context.Background()}
-	svc.mcpServer = newMCPServer()
+	workspaceDir := t.TempDir()
+	svc := &mcpServer{
+		ctx:    context.Background(),
+		config: config{workspaceDir: workspaceDir},
+	}
+	svc.mcpServer = newMCPServer(workspaceDir)
 
 	if err := svc.registerTools(); err != nil {
 		t.Fatalf("registerTools() returned error: %v", err)

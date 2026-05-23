@@ -247,7 +247,7 @@ func newRegisteredTestMCPServerWithContextFakeLSPDelay(t *testing.T, fakeDelay t
 	client := newRegisterToolsRequestContextFakeLSPClientWithDelay(t, workspaceDir, fixturePath, fakeDelay)
 
 	svc := &mcpServer{ctx: context.Background(), lspClient: client}
-	svc.mcpServer = newMCPServer()
+	svc.mcpServer = newMCPServer(workspaceDir)
 
 	if err := svc.registerTools(); err != nil {
 		t.Fatalf("registerTools() returned error: %v", err)

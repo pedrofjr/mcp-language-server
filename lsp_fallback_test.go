@@ -129,13 +129,13 @@ func TestWithToolLogging_ComposedWithLSPGuardNilClient_LogsSingleErrorAndSkipsIn
 	}
 
 	logs := logBuf.String()
-	if !strings.Contains(logs, "tool=x action=error") {
+	if !strings.Contains(logs, "tool=x outcome=error") {
 		t.Fatalf("expected error log in composed wrapper, got logs: %s", logs)
 	}
-	if strings.Contains(logs, "tool=x action=end") {
+	if strings.Contains(logs, "tool=x outcome=success") {
 		t.Fatalf("did not expect success log in composed wrapper, got logs: %s", logs)
 	}
-	if strings.Count(logs, "tool=x action=error") != 1 {
+	if strings.Count(logs, "tool=x outcome=error") != 1 {
 		t.Fatalf("expected exactly one error log entry, got logs: %s", logs)
 	}
 }

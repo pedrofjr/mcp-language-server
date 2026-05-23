@@ -163,11 +163,12 @@ func newServer(config *config) (*mcpServer, error) {
 	}, nil
 }
 
-func newMCPServer() *server.MCPServer {
+func newMCPServer(workspaceDir string) *server.MCPServer {
 	return server.NewMCPServer(
 		"MCP Language Server",
 		"v0.0.2",
 		server.WithRecovery(),
+		server.WithToolHandlerMiddleware(toolObservabilityMiddleware(workspaceDir)),
 	)
 }
 
@@ -204,7 +205,7 @@ func (s *mcpServer) start() error {
 		return err
 	}
 
-	s.mcpServer = newMCPServer()
+	s.mcpServer = newMCPServer(s.config.workspaceDir)
 
 	err := s.registerTools()
 	if err != nil {
