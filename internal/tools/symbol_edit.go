@@ -366,25 +366,46 @@ func SafeDeleteSymbol(ctx context.Context, client *lsp.Client, filePath, symbolN
 
 		if client != nil {
 			locs, semErr := resolveSymbolReferencesForDelete(ctx, client, normalizedPath, symbolName)
-			if semErr == nil {
-				targetNorm := normalizedScanPath(normalizedPath)
-				crossCount := 0
-				for _, loc := range locs {
-					parsedURI, parseErr := protocol.ParseDocumentUri(string(loc.URI))
-					if parseErr != nil {
-						continue
-					}
-					locPath, pathErr := safeDocumentURIPath(parsedURI)
-					if pathErr != nil {
-						continue
-					}
-					if normalizedScanPath(locPath) != targetNorm {
-						crossCount++
-					}
+			if semErr != nil {
+				workspaceRoot := filepath.Dir(normalizedPath)
+				crossFileCount, scanErr := countCrossFileTextReferences(workspaceRoot, normalizedPath, lowerSymbol)
+				if scanErr != nil {
+					return "", fmt.Errorf(
+						"referencias semanticas indisponiveis (%v) e scan textual cross-file falhou (%v): operacao destrutiva bloqueada",
+						semErr,
+						scanErr,
+					)
 				}
-				if crossCount > 0 {
-					return "", fmt.Errorf("simbolo %q tem %d referencias cross-file semanticas. Use force=true para forcar a remocao", symbolName, crossCount)
+				if crossFileCount > 0 {
+					return "", fmt.Errorf(
+						"simbolo %q tem %d referencias em outros arquivos (fallback textual apos falha LSP em references). Use force=true para forcar a remocao",
+						symbolName,
+						crossFileCount,
+					)
 				}
+				return "", fmt.Errorf(
+					"referencias semanticas indisponiveis (%v): operacao destrutiva bloqueada sem confirmar ausencia de usos cross-file; use force=true apenas se tiver certeza",
+					semErr,
+				)
+			}
+
+			targetNorm := normalizedScanPath(normalizedPath)
+			crossCount := 0
+			for _, loc := range locs {
+				parsedURI, parseErr := protocol.ParseDocumentUri(string(loc.URI))
+				if parseErr != nil {
+					continue
+				}
+				locPath, pathErr := safeDocumentURIPath(parsedURI)
+				if pathErr != nil {
+					continue
+				}
+				if normalizedScanPath(locPath) != targetNorm {
+					crossCount++
+				}
+			}
+			if crossCount > 0 {
+				return "", fmt.Errorf("simbolo %q tem %d referencias cross-file semanticas. Use force=true para forcar a remocao", symbolName, crossCount)
 			}
 		} else {
 			workspaceRoot := filepath.Dir(normalizedPath)

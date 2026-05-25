@@ -466,6 +466,119 @@ func TestSafeDeleteSymbol_BlocksWhenCrossFileReferenceExists(t *testing.T) {
 	}
 }
 
+func TestSafeDeleteSymbol_BlocksWhenSemanticReferencesFailAndCrossFileReferenceExists(t *testing.T) {
+	workspaceDir := t.TempDir()
+	pathUnitA := filepath.Join(workspaceDir, "UnitA.pas")
+	pathUnitB := filepath.Join(workspaceDir, "UnitB.pas")
+
+	originalUnitA := "unit UnitA;\n" +
+		"implementation\n\n" +
+		"procedure TFoo.Bar;\n" +
+		"begin\n" +
+		"end;\n\n" +
+		"end.\n"
+	unitB := "unit UnitB;\n" +
+		"implementation\n\n" +
+		"procedure UseBar;\n" +
+		"begin\n" +
+		"  TFoo.Bar;\n" +
+		"end;\n\n" +
+		"end.\n"
+
+	if err := os.WriteFile(pathUnitA, []byte(originalUnitA), 0o644); err != nil {
+		t.Fatalf("failed to write UnitA fixture: %v", err)
+	}
+	if err := os.WriteFile(pathUnitB, []byte(unitB), 0o644); err != nil {
+		t.Fatalf("failed to write UnitB fixture: %v", err)
+	}
+
+	originalResolveHook := resolveSymbolReferencesForDelete
+	resolveSymbolReferencesForDelete = func(_ context.Context, _ *lsp.Client, _ string, _ string) ([]protocol.Location, error) {
+		return nil, fmt.Errorf("textDocument/references unavailable")
+	}
+	t.Cleanup(func() {
+		resolveSymbolReferencesForDelete = originalResolveHook
+	})
+
+	originalApplyHook := applySymbolBodyTextEdits
+	applySymbolBodyTextEdits = func(_ context.Context, _ *lsp.Client, _ string, _ []TextEdit) (string, error) {
+		return "", nil
+	}
+	t.Cleanup(func() {
+		applySymbolBodyTextEdits = originalApplyHook
+	})
+
+	client := &lsp.Client{}
+	_, err := SafeDeleteSymbol(context.Background(), client, pathUnitA, "TFoo.Bar", false)
+	if err == nil {
+		t.Fatal("expected SafeDeleteSymbol to block when LSP references fail and cross-file textual reference exists")
+	}
+
+	errMsg := strings.ToLower(err.Error())
+	if !strings.Contains(errMsg, "referenc") && !strings.Contains(errMsg, "fallback") {
+		t.Fatalf("expected blocking error to mention references or textual fallback, got: %v", err)
+	}
+
+	finalUnitA, readErr := os.ReadFile(pathUnitA)
+	if readErr != nil {
+		t.Fatalf("failed to read UnitA after SafeDeleteSymbol: %v", readErr)
+	}
+	if string(finalUnitA) != originalUnitA {
+		t.Fatalf("expected UnitA unchanged when LSP references fail with cross-file usage; expected=%q got=%q", originalUnitA, string(finalUnitA))
+	}
+}
+
+func TestSafeDeleteSymbol_BlocksWhenSemanticReferencesFailWithoutCrossFileUsage(t *testing.T) {
+	workspaceDir := t.TempDir()
+	pathUnitA := filepath.Join(workspaceDir, "UnitA.pas")
+
+	originalUnitA := "unit UnitA;\n" +
+		"implementation\n\n" +
+		"procedure TFoo.Bar;\n" +
+		"begin\n" +
+		"end;\n\n" +
+		"end.\n"
+
+	if err := os.WriteFile(pathUnitA, []byte(originalUnitA), 0o644); err != nil {
+		t.Fatalf("failed to write UnitA fixture: %v", err)
+	}
+
+	originalResolveHook := resolveSymbolReferencesForDelete
+	resolveSymbolReferencesForDelete = func(_ context.Context, _ *lsp.Client, _ string, _ string) ([]protocol.Location, error) {
+		return nil, fmt.Errorf("textDocument/references unavailable")
+	}
+	t.Cleanup(func() {
+		resolveSymbolReferencesForDelete = originalResolveHook
+	})
+
+	originalApplyHook := applySymbolBodyTextEdits
+	applySymbolBodyTextEdits = func(_ context.Context, _ *lsp.Client, _ string, _ []TextEdit) (string, error) {
+		return "", nil
+	}
+	t.Cleanup(func() {
+		applySymbolBodyTextEdits = originalApplyHook
+	})
+
+	client := &lsp.Client{}
+	_, err := SafeDeleteSymbol(context.Background(), client, pathUnitA, "TFoo.Bar", false)
+	if err == nil {
+		t.Fatal("expected SafeDeleteSymbol to fail-closed when LSP references are unavailable")
+	}
+
+	errMsg := strings.ToLower(err.Error())
+	if !strings.Contains(errMsg, "referenc") && !strings.Contains(errMsg, "destrutiv") {
+		t.Fatalf("expected fail-closed error to mention unavailable references, got: %v", err)
+	}
+
+	finalUnitA, readErr := os.ReadFile(pathUnitA)
+	if readErr != nil {
+		t.Fatalf("failed to read UnitA after SafeDeleteSymbol: %v", readErr)
+	}
+	if string(finalUnitA) != originalUnitA {
+		t.Fatalf("expected UnitA unchanged on fail-closed LSP references error; expected=%q got=%q", originalUnitA, string(finalUnitA))
+	}
+}
+
 func TestSafeDeleteSymbol_BlocksWhenSemanticCrossFileReferenceExists(t *testing.T) {
 	workspaceDir := t.TempDir()
 	pathUnitA := filepath.Join(workspaceDir, "UnitA.pas")
