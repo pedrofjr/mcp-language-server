@@ -184,6 +184,8 @@ Para explorar um projeto de forma orientada:
 
 1. Rode `check_onboarding_performed`.
 2. Se ainda nao estiver pronto, rode `onboarding` e depois `check_onboarding_performed` novamente.
+   - Por padrao o estado de onboarding persiste fora do workspace (`%UserConfigDir%/oracle-mcp/onboarding/`).
+   - Use `persistInProject: true` (ou `DELPHI_ORACLE_MCP_ONBOARDING_IN_PROJECT=1`) apenas se precisar do marcador `.oracle-onboarding.json` no projeto.
 3. Rode `get_symbols_overview` para obter um panorama inicial de unidades e simbolos.
 
 Exemplo de encadeamento: selecione `units[i].symbols[j].trace.definition.symbolName` (ou `trace.references.symbolName`) retornado por `get_symbols_overview` e passe diretamente como `symbolName` nas tools `definition` e `references`.

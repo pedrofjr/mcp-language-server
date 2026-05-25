@@ -20,6 +20,7 @@ func createDelphiFixture(t *testing.T, projectPath string) {
 }
 
 func TestOnboardingContext_quando_onboarding_em_ctxA_so_ctxA_fica_performed(t *testing.T) {
+	isolateOnboardingDir(t)
 	projectPath := t.TempDir()
 	createDelphiFixture(t, projectPath)
 
@@ -34,6 +35,7 @@ func TestOnboardingContext_quando_onboarding_em_ctxA_so_ctxA_fica_performed(t *t
 }
 
 func TestOnboardingContext_quando_sem_contexto_explicito_mantem_compat_default_legacy(t *testing.T) {
+	isolateOnboardingDir(t)
 	projectPath := t.TempDir()
 	createDelphiFixture(t, projectPath)
 
@@ -114,6 +116,7 @@ func TestOnboardingContext_quando_contexto_nao_default_nao_faz_fallback_para_leg
 }
 
 func TestOnboardingContext_quando_legado_existe_e_onboarding_em_ctxA_preserva_legacy_default(t *testing.T) {
+	isolateOnboardingDir(t)
 	projectPath := t.TempDir()
 	createDelphiFixture(t, projectPath)
 

@@ -2390,6 +2390,8 @@ func (s *mcpServer) registerTools() error {
 		mcp.WithDescription("Escaneia estrutura do projeto Delphi e retorna inventario de units, forms e entry point"),
 		mcp.WithString("projectPath", mcp.Required(), mcp.Description("Caminho absoluto do diretorio do projeto")),
 		mcp.WithString("context", mcp.Description("Chave de contexto de onboarding (opcional; default quando omitido)")),
+		mcp.WithBoolean("persistInProject",
+			mcp.Description("Opt-in: quando true, grava .oracle-onboarding.json no workspace; padrao persiste fora do projeto")),
 	), withToolLogging("onboarding", func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		projectPath, ok := request.Params.Arguments["projectPath"].(string)
 		if !ok || strings.TrimSpace(projectPath) == "" {
@@ -2399,8 +2401,14 @@ func (s *mcpServer) registerTools() error {
 		if err != nil {
 			return OpErrorFromParseArg(err)
 		}
+		persistInProject, _ := request.Params.Arguments["persistInProject"].(bool)
 
-		result, err := tools.PerformOnboardingWithContext(projectPath, contextKey)
+		result, err := tools.PerformOnboardingWithContextAndOptions(
+			ctx,
+			projectPath,
+			contextKey,
+			tools.OnboardingOptions{PersistInProject: persistInProject},
+		)
 		if err != nil {
 			return OpErrorFromDomain("onboarding", err, "verify projectPath and workspace layout, then retry")
 		}

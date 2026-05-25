@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -39,7 +40,7 @@ func assertOnboardingImpactLog(t *testing.T, logs string, source string, project
 }
 
 func TestOnboardingImpact_AutoFlow_EmitsStructuredLogAfterAttempt(t *testing.T) {
-	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("ORACLE_MCP_ONBOARDING_DIR", t.TempDir())
 	projectPath := t.TempDir()
 	createMinimalOnboardingFixture(t, projectPath)
 
@@ -49,9 +50,14 @@ func TestOnboardingImpact_AutoFlow_EmitsStructuredLogAfterAttempt(t *testing.T) 
 		t.Fatal("expected a new project to require auto onboarding before the attempt")
 	}
 
-	result, err := tools.PerformOnboardingWithContext(projectPath, "")
+	result, err := tools.PerformOnboardingWithContextAndOptions(
+		context.Background(),
+		projectPath,
+		"",
+		tools.OnboardingOptions{AutoRun: true},
+	)
 	if err != nil {
-		t.Fatalf("PerformOnboardingWithContext returned error: %v", err)
+		t.Fatalf("PerformOnboardingWithContextAndOptions returned error: %v", err)
 	}
 	if result == "" {
 		t.Fatal("expected onboarding attempt to return a non-empty payload")
@@ -66,7 +72,7 @@ func TestOnboardingImpact_AutoFlow_EmitsStructuredLogAfterAttempt(t *testing.T) 
 }
 
 func TestRegisterTools_OnboardingImpact_ManualTool_EmitsStructuredLogAndPreservesToolContract(t *testing.T) {
-	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("ORACLE_MCP_ONBOARDING_DIR", t.TempDir())
 	projectPath := t.TempDir()
 	createMinimalOnboardingFixture(t, projectPath)
 

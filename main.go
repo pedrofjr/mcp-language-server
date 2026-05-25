@@ -212,18 +212,28 @@ func (s *mcpServer) start() error {
 		return fmt.Errorf("tool registration failed: %v", err)
 	}
 
-	// Iniciar auto-onboarding assincronamente se ainda nao foi feito
+	// Iniciar auto-onboarding assincronamente se ainda nao foi feito (persistencia fora do workspace).
 	go func() {
 		time.Sleep(500 * time.Millisecond) // deixa requests iniciais passarem
-		if shouldStartAutoOnboarding(s.config.workspaceDir) {
-			coreLogger.Info("Starting automatic project onboarding...")
-			_, err := tools.PerformOnboarding(s.config.workspaceDir)
-			if err != nil {
-				coreLogger.Error("Automatic onboarding failed: %v", err)
-			} else {
-				coreLogger.Info("Automatic onboarding completed successfully")
-			}
+		if !shouldStartAutoOnboarding(s.config.workspaceDir) {
+			return
 		}
+
+		ctx, cancel := context.WithTimeout(s.ctx, 2*time.Minute)
+		defer cancel()
+
+		coreLogger.Info("Starting automatic project onboarding...")
+		_, err := tools.PerformOnboardingWithContextAndOptions(
+			ctx,
+			s.config.workspaceDir,
+			"",
+			tools.OnboardingOptions{AutoRun: true},
+		)
+		if err != nil {
+			coreLogger.Error("Automatic onboarding failed: %v", err)
+			return
+		}
+		coreLogger.Info("Automatic onboarding completed successfully")
 	}()
 
 	return server.ServeStdio(s.mcpServer)
