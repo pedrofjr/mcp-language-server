@@ -176,7 +176,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols. Each symbol now includes `trace` with `preferredSymbolName`, `symbolNameCandidates`, and ready-to-call `definition.symbolName` / `references.symbolName` bridge values.
-- `run_query`: Consulta estrutural tree-sitter Delphi 6 no workspace (`.pas`, `.dpr`, `.dpk`) com `node_type`, fallback textual, `captureName` e `symbolName`.
+- `run_query`: Consulta estrutural tree-sitter Delphi 6 no workspace (`.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`) com `node_type`, fallback textual, `captureName` e `symbolName`.
 
 ## Fluxo inicial recomendado
 
@@ -194,7 +194,7 @@ Exemplo de encadeamento: selecione `units[i].symbols[j].trace.definition.symbolN
 
 Status atual: v2 com busca estrutural tree-sitter Delphi 6 integrada no runtime Go (`third_party/tree-sitter-delphi6`).
 
-O `run_query` varre arquivos Delphi do workspace (`.pas`, `.dpr`, `.dpk`), parseia com tree-sitter e retorna matches em JSON estruturado. Com `node_type` (ou `query` no formato de tipo de nó válido), executa query tree-sitter `(node_type) @match`. Sem `node_type`, consultas livres usam fallback textual: filtro por substring no texto dos nós nomeados da AST. Campos legados `file`, `line` e `text` permanecem por compatibilidade.
+O `run_query` varre arquivos Delphi do workspace com a mesma matriz de extensões de `references` (`.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`), parseia com tree-sitter e retorna matches em JSON estruturado. Com `node_type` (ou `query` no formato de tipo de nó válido), executa query tree-sitter `(node_type) @match`. Sem `node_type`, consultas livres usam fallback textual: filtro por substring no texto dos nós nomeados da AST. Campos legados `file`, `line` e `text` permanecem por compatibilidade.
 
 ### Parâmetros
 
@@ -288,18 +288,30 @@ Busca estrutural por `node_type` (sem filtro textual adicional):
 }
 ```
 
+### Matriz de extensões Delphi (workspace)
+
+Centralizada em `internal/tools/delphi_workspace.go` e compartilhada por `run_query`, `references`/fallback Delphi e `safe_delete_symbol` (scan cross-file):
+
+| Extensão | Uso típico |
+|----------|------------|
+| `.pas` | Units Delphi |
+| `.pp` | Units legadas (Pascal) |
+| `.dpr` | Program/project |
+| `.dpk` | Package |
+| `.lpr` | Program Lazarus/legado |
+| `.inc` | Includes/fragmentos (`{$I}`); parseados com wrapper sintético quando necessário |
+
 ### Limitações atuais
 
 - Não aceita query tree-sitter arbitrária (apenas padrão `(node_type) @match` ou inferência implícita de tipo a partir de `query`).
 - Consultas livres sem `node_type` válido usam fallback textual por substring nos nós nomeados da AST (não varredura linha-a-linha isolada).
 - `captureName` só aparece em capturas explícitas; `symbolName` cobre apenas declarações suportadas (rotina, módulo, package `.dpk`).
-- Varredura limitada a `.pas`, `.dpr`, `.dpk` (sem `.inc`, `.pp`, `.lpr` — ver item de matriz de extensões no backlog).
+- `.inc` são fragmentos: o parser pode exigir wrapper `unit … interface …` antes da busca estrutural (comportamento já aplicado em `run_query`).
 - Sem score semântico, sem DSL `build_query`/`adapt_query` e sem exportação de AST completa por match.
 
 ### Evoluções futuras (fora do escopo v2 atual)
 
 - Queries tree-sitter customizadas e filtros por diretório/escopo sintático.
-- Alinhar extensões Delphi com `references` (`.inc`, `.pp`, `.lpr`).
 - Payload enriquecido para auditoria/refactor (ranges semânticos, scores).
 
 ## About

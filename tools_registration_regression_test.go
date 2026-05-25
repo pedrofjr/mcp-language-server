@@ -1311,6 +1311,8 @@ func TestRegisterTools_RunQuery_ToolsListContractDocumentsStructuralAPI(t *testi
 		"fallback",
 		"capturename",
 		"symbolname",
+		".inc",
+		"references",
 	}
 	for _, term := range requiredInDescription {
 		if !strings.Contains(desc, term) {
@@ -1697,6 +1699,71 @@ func TestRegisterTools_RunQuery_ScansWorkspaceDelphiFilesAndFindsTempToken(t *te
 	}
 	if len(matches) == 0 {
 		t.Fatalf("expected run_query workspace scan to find token %q inside Delphi workspace files, got %v", queryText, shaped)
+	}
+}
+
+func TestRegisterTools_RunQuery_ScansIncFragmentWithStructuralMatch(t *testing.T) {
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to capture working directory: %v", err)
+	}
+
+	tempDir := t.TempDir()
+	incPath := filepath.Join(tempDir, "shared_helpers.inc")
+	incContent := "procedure UniqueIncFragmentToken_20260525;\nconst UniqueIncConstToken_20260525 = 42;\n"
+	if err := os.WriteFile(incPath, []byte(incContent), 0o600); err != nil {
+		t.Fatalf("failed to write .inc fragment for run_query test: %v", err)
+	}
+
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir for run_query .inc test: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("failed to restore working directory: %v", chdirErr)
+		}
+	})
+
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	callResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name": "run_query",
+			"arguments": map[string]any{
+				"node_type": "procedure_declaration",
+				"query":     "UniqueIncFragmentToken_20260525",
+				"limit":     5,
+			},
+		},
+		103,
+	)
+
+	var callResult map[string]any
+	decodeRunQueryCallResult(t, callResp.Result, &callResult)
+
+	isError, _ := callResult["isError"].(bool)
+	if isError {
+		resultBytes, _ := json.Marshal(callResult)
+		t.Fatalf("expected run_query on .inc fragment to succeed, got %s", string(resultBytes))
+	}
+
+	shaped := decodeRunQuerySuccessPayload(t, callResult)
+	matches, ok := shaped["matches"].([]any)
+	if !ok || len(matches) == 0 {
+		t.Fatalf("expected run_query to match procedure in .inc fragment, got %v", shaped)
+	}
+
+	first, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first match object, got %T", matches[0])
+	}
+	filePath, _ := first["filePath"].(string)
+	if !strings.HasSuffix(strings.ToLower(filePath), ".inc") {
+		t.Fatalf("expected first match filePath to end with .inc, got %q", filePath)
 	}
 }
 

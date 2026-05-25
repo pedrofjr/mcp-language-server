@@ -420,15 +420,6 @@ func collectReferenceWorkspaceRoots(client *lsp.Client, symbolLocations []protoc
 	return roots
 }
 
-func isDelphiWorkspaceReferenceFile(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".pas", ".pp", ".dpr", ".dpk", ".lpr", ".inc":
-		return true
-	default:
-		return false
-	}
-}
-
 func shouldSkipReferenceWorkspaceDir(name string) bool {
 	switch strings.ToLower(name) {
 	case ".git", ".hg", ".svn", "node_modules", "vendor", "target", "build", "dist":

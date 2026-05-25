@@ -277,11 +277,6 @@ func symbolLineAt(src string, line int) string {
 	return lines[line-1]
 }
 
-func isDelphiWorkspaceFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".pas" || ext == ".dpr" || ext == ".dpk"
-}
-
 func normalizedScanPath(path string) string {
 	cleaned := filepath.Clean(path)
 	cleaned = strings.ReplaceAll(cleaned, "\\", "/")
@@ -300,7 +295,7 @@ func countCrossFileTextReferences(workspaceRoot, targetFilePath, symbolToken str
 		if d.IsDir() {
 			return nil
 		}
-		if !isDelphiWorkspaceFile(path) {
+		if !IsDelphiWorkspaceSourceFile(path) {
 			return nil
 		}
 		if normalizedScanPath(path) == target {
