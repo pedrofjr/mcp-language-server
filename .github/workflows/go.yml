@@ -24,6 +24,12 @@ jobs:
       - name: Build
         run: go build -o mcp-language-server
 
+      - name: Verify vendored tree-sitter Delphi
+        run: go test . -run TestTreeSitterDelphi6_VendoredModuleResolves -count=1
+
+      - name: Run Delphi structural tool tests
+        run: go test ./internal/tools/... -run "RunQuery|BuildQuery" -count=1
+
       - name: Install just
         run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 

@@ -317,6 +317,19 @@ git clone https://github.com/isaacphi/mcp-language-server.git
 cd mcp-language-server
 ```
 
+#### Delphi / Oracle LSP (tree-sitter)
+
+**Modo release (clone só do MCP):** o parser Delphi 6 está em `third_party/tree-sitter-delphi6/`. `go build` e `go test` não dependem de repositório irmão (`../Delphi_Oracle`).
+
+**Modo monorepo (desenvolvimento Oracle):** após alterar a gramática em `Delphi_Oracle/tree-sitter-delphi6`, sincronize o vendor e commite:
+
+```powershell
+.\scripts\sync-tree-sitter-delphi6.ps1
+go test ./internal/tools/... -run RunQuery -count=1
+```
+
+Detalhes: `third_party/tree-sitter-delphi6/README.md`.
+
 A [justfile](https://just.systems/man/en/) is included for convenience:
 
 ```bash

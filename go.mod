@@ -40,4 +40,4 @@ tool (
 	honnef.co/go/tools/cmd/staticcheck
 )
 
-replace github.com/tree-sitter/tree-sitter-delphi6 => ../Delphi_Oracle/tree-sitter-delphi6/bindings/go
+replace github.com/tree-sitter/tree-sitter-delphi6 => ./third_party/tree-sitter-delphi6/bindings/go
