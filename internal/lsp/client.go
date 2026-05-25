@@ -53,8 +53,10 @@ type Client struct {
 	notificationMu       sync.RWMutex
 
 	// Diagnostic cache
-	diagnostics   map[protocol.DocumentUri][]protocol.Diagnostic
+	diagnostics   map[protocol.DocumentUri]fileDiagnosticCache
 	diagnosticsMu sync.RWMutex
+	diagWaiters   map[protocol.DocumentUri]chan struct{}
+	diagWaitersMu sync.Mutex
 
 	// Files are currently opened by the LSP
 	openFiles   map[string]*OpenFileInfo
@@ -92,7 +94,8 @@ func NewClient(command string, args ...string) (*Client, error) {
 		handlers:              make(map[string]chan *Message),
 		notificationHandlers:  make(map[string]NotificationHandler),
 		serverRequestHandlers: make(map[string]ServerRequestHandler),
-		diagnostics:           make(map[protocol.DocumentUri][]protocol.Diagnostic),
+		diagnostics:           make(map[protocol.DocumentUri]fileDiagnosticCache),
+		diagWaiters:           make(map[protocol.DocumentUri]chan struct{}),
 		openFiles:             make(map[string]*OpenFileInfo),
 	}
 
@@ -466,6 +469,14 @@ type OpenFileInfo struct {
 	URI     protocol.DocumentUri
 }
 
+// FileDiagnosticCache stores publishDiagnostics data with document version metadata.
+type FileDiagnosticCache struct {
+	Diagnostics    []protocol.Diagnostic
+	PublishVersion int32
+}
+
+type fileDiagnosticCache = FileDiagnosticCache
+
 func (c *Client) OpenFile(ctx context.Context, filepath string) error {
 	uri := string(protocol.URIFromPath(filepath))
 
@@ -658,8 +669,120 @@ func safeDocumentURIPath(uri protocol.DocumentUri) (path string, err error) {
 }
 
 func (c *Client) GetFileDiagnostics(uri protocol.DocumentUri) []protocol.Diagnostic {
+	entry, ok := c.GetFileDiagnosticCacheEntry(uri)
+	if !ok {
+		return nil
+	}
+	return entry.Diagnostics
+}
+
+func (c *Client) GetFileDiagnosticCacheEntry(uri protocol.DocumentUri) (fileDiagnosticCache, bool) {
 	c.diagnosticsMu.RLock()
 	defer c.diagnosticsMu.RUnlock()
 
-	return c.diagnostics[uri]
+	entry, ok := c.diagnostics[uri]
+	return entry, ok
+}
+
+func (c *Client) UpdateFileDiagnostics(uri protocol.DocumentUri, diagnostics []protocol.Diagnostic) {
+	publishVersion := int32(0)
+	c.openFilesMu.RLock()
+	if fileInfo, ok := c.openFiles[string(uri)]; ok {
+		publishVersion = fileInfo.Version
+	}
+	c.openFilesMu.RUnlock()
+
+	c.diagnosticsMu.Lock()
+	c.diagnostics[uri] = fileDiagnosticCache{
+		Diagnostics:    diagnostics,
+		PublishVersion: publishVersion,
+	}
+	c.diagnosticsMu.Unlock()
+	c.signalDiagnosticPublish(uri)
+}
+
+func (c *Client) storePublishedDiagnostics(uri protocol.DocumentUri, publishVersion int32, diagnostics []protocol.Diagnostic) {
+	c.diagnosticsMu.Lock()
+	c.diagnostics[uri] = fileDiagnosticCache{
+		Diagnostics:    diagnostics,
+		PublishVersion: publishVersion,
+	}
+	c.diagnosticsMu.Unlock()
+	c.signalDiagnosticPublish(uri)
+}
+
+func (c *Client) signalDiagnosticPublish(uri protocol.DocumentUri) {
+	c.diagWaitersMu.Lock()
+	waiter := c.diagWaiters[uri]
+	c.diagWaitersMu.Unlock()
+
+	if waiter == nil {
+		return
+	}
+
+	select {
+	case waiter <- struct{}{}:
+	default:
+	}
+}
+
+// WaitForDiagnosticPublish blocks until publishDiagnostics arrives or the context/timeout elapses.
+func (c *Client) WaitForDiagnosticPublish(ctx context.Context, uri protocol.DocumentUri) error {
+	waiter := make(chan struct{}, 1)
+
+	c.diagWaitersMu.Lock()
+	c.diagWaiters[uri] = waiter
+	c.diagWaitersMu.Unlock()
+
+	defer func() {
+		c.diagWaitersMu.Lock()
+		delete(c.diagWaiters, uri)
+		c.diagWaitersMu.Unlock()
+	}()
+
+	timeout := diagnosticPublishWaitTimeout(ctx)
+	if timeout <= 0 {
+		return ctx.Err()
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-waiter:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func diagnosticPublishWaitTimeout(ctx context.Context) time.Duration {
+	const maxWait = 2 * time.Second
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return maxWait
+	}
+
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining < maxWait {
+		return remaining
+	}
+	return maxWait
+}
+
+func (c *Client) GetOpenFileVersionByURI(uri protocol.DocumentUri) (int32, bool) {
+	c.openFilesMu.RLock()
+	defer c.openFilesMu.RUnlock()
+
+	fileInfo, ok := c.openFiles[string(uri)]
+	if !ok {
+		return 0, false
+	}
+	return fileInfo.Version, true
 }

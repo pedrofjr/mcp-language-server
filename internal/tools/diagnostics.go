@@ -2,15 +2,18 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/lsp"
 	"github.com/isaacphi/mcp-language-server/internal/protocol"
 )
+
+// ErrDiagnosticsUnavailable indicates diagnostics could not be loaded reliably.
+var ErrDiagnosticsUnavailable = errors.New("diagnostics unavailable")
 
 // GetDiagnosticsForFile retrieves diagnostics for a specific file from the language server
 func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath string, contextLines int, showLineNumbers bool) (string, error) {
@@ -31,38 +34,129 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 		return "", fmt.Errorf("could not open file: %v", err)
 	}
 
-	// Wait for diagnostics (bounded by request context).
-	// TODO: wait for notification instead of fixed delay.
-	if err := waitForDiagnosticsDelay(ctx, 3*time.Second); err != nil {
-		return "", err
-	}
-
-	// Convert the file path to URI format
 	uri := protocol.URIFromPath(normalizedPath)
-
-	// Request fresh diagnostics
 	diagParams := protocol.DocumentDiagnosticParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	_, err = client.Diagnostic(ctx, diagParams)
-	if err != nil {
-		toolsLogger.Error("Failed to get diagnostics: %v", err)
-	}
 
-	// Get diagnostics from the cache
-	diagnostics := client.GetFileDiagnostics(uri)
+	report, pullErr := client.Diagnostic(ctx, diagParams)
+	diagnostics, resolveErr := resolveDiagnosticsForFile(ctx, client, uri, report, pullErr)
+	if resolveErr != nil {
+		return "", resolveErr
+	}
 
 	if len(diagnostics) == 0 {
 		return "No diagnostics found for " + filePath, nil
 	}
 
-	// Format file header
+	return formatDiagnosticsOutput(ctx, client, filePath, normalizedPath, uri, diagnostics, contextLines, showLineNumbers)
+}
+
+func resolveDiagnosticsForFile(
+	ctx context.Context,
+	client *lsp.Client,
+	uri protocol.DocumentUri,
+	report protocol.DocumentDiagnosticReport,
+	pullErr error,
+) ([]protocol.Diagnostic, error) {
+	if pullErr == nil {
+		items, unchanged, extractErr := diagnosticsFromPullReport(report)
+		if extractErr != nil {
+			return nil, extractErr
+		}
+		if unchanged {
+			if waitErr := client.WaitForDiagnosticPublish(ctx, uri); waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+				return nil, fmt.Errorf("%w: waiting for published diagnostics: %v", ErrDiagnosticsUnavailable, waitErr)
+			}
+			return diagnosticsFromValidCache(client, uri)
+		}
+
+		if len(items) > 0 {
+			client.UpdateFileDiagnostics(uri, items)
+			return items, nil
+		}
+
+		if waitErr := client.WaitForDiagnosticPublish(ctx, uri); waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+			return nil, fmt.Errorf("%w: waiting for published diagnostics after empty pull: %v", ErrDiagnosticsUnavailable, waitErr)
+		}
+		if cached, cacheErr := diagnosticsFromValidCache(client, uri); cacheErr == nil && len(cached) > 0 {
+			return cached, nil
+		}
+
+		client.UpdateFileDiagnostics(uri, items)
+		return items, nil
+	}
+
+	toolsLogger.Error("Failed to get diagnostics: %v", pullErr)
+
+	if waitErr := client.WaitForDiagnosticPublish(ctx, uri); waitErr != nil && !errors.Is(waitErr, context.Canceled) {
+		return nil, fmt.Errorf("%w: textDocument/diagnostic failed (%v) and publish wait ended: %v", ErrDiagnosticsUnavailable, pullErr, waitErr)
+	}
+
+	diagnostics, cacheErr := diagnosticsFromValidCache(client, uri)
+	if cacheErr != nil {
+		return nil, fmt.Errorf("%w: textDocument/diagnostic failed: %v", ErrDiagnosticsUnavailable, pullErr)
+	}
+	return diagnostics, nil
+}
+
+func diagnosticsFromPullReport(report protocol.DocumentDiagnosticReport) ([]protocol.Diagnostic, bool, error) {
+	switch typed := report.Value.(type) {
+	case protocol.RelatedFullDocumentDiagnosticReport:
+		return typed.Items, false, nil
+	case protocol.RelatedUnchangedDocumentDiagnosticReport:
+		return nil, true, nil
+	default:
+		return nil, false, fmt.Errorf("%w: unsupported diagnostic report type %T", ErrDiagnosticsUnavailable, report.Value)
+	}
+}
+
+func diagnosticsFromValidCache(client *lsp.Client, uri protocol.DocumentUri) ([]protocol.Diagnostic, error) {
+	entry, ok := client.GetFileDiagnosticCacheEntry(uri)
+	if !ok {
+		return nil, fmt.Errorf("%w: no cached diagnostics for current document version", ErrDiagnosticsUnavailable)
+	}
+
+	openVersion, openOk := client.GetOpenFileVersionByURI(uri)
+	if !openOk {
+		return nil, fmt.Errorf("%w: document is not open in LSP client", ErrDiagnosticsUnavailable)
+	}
+
+	if !diagnosticCacheValidForOpenVersion(entry, openVersion) {
+		return nil, fmt.Errorf(
+			"%w: cached diagnostics are stale (open version %d, cache version %d)",
+			ErrDiagnosticsUnavailable,
+			openVersion,
+			entry.PublishVersion,
+		)
+	}
+
+	return entry.Diagnostics, nil
+}
+
+func diagnosticCacheValidForOpenVersion(entry lsp.FileDiagnosticCache, openVersion int32) bool {
+	if entry.PublishVersion == 0 {
+		// Servers omitting publish version: accept cache only after an explicit publish notification.
+		return true
+	}
+	return entry.PublishVersion == openVersion
+}
+
+func formatDiagnosticsOutput(
+	ctx context.Context,
+	client *lsp.Client,
+	filePath string,
+	normalizedPath string,
+	uri protocol.DocumentUri,
+	diagnostics []protocol.Diagnostic,
+	contextLines int,
+	showLineNumbers bool,
+) (string, error) {
 	fileInfo := fmt.Sprintf("%s\nDiagnostics in File: %d\n",
 		filePath,
 		len(diagnostics),
 	)
 
-	// Create a summary of all the diagnostics
 	var diagSummaries []string
 	var diagLocations []protocol.Location
 
@@ -77,7 +171,6 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 			location,
 			diag.Message)
 
-		// Add source and code if available
 		if diag.Source != "" {
 			summary += fmt.Sprintf(" (Source: %s", diag.Source)
 			if diag.Code != nil {
@@ -89,15 +182,12 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 		}
 
 		diagSummaries = append(diagSummaries, summary)
-
-		// Create a location for this diagnostic to use with line ranges
 		diagLocations = append(diagLocations, protocol.Location{
 			URI:   uri,
 			Range: diag.Range,
 		})
 	}
 
-	// Format content with context
 	fileContent, err := os.ReadFile(normalizedPath)
 	if err != nil {
 		return fileInfo + "\nError reading file: " + err.Error(), nil
@@ -105,36 +195,29 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 
 	lines := strings.Split(string(fileContent), "\n")
 
-	// Collect lines to display
 	var linesToShow map[int]bool
 	if contextLines > 0 {
-		// Use GetLineRangesToDisplay for context
 		linesToShow, err = GetLineRangesToDisplay(ctx, client, diagLocations, len(lines), contextLines)
 		if err != nil {
-			// If error, just show the diagnostic lines
 			linesToShow = make(map[int]bool)
 			for _, diag := range diagnostics {
 				linesToShow[int(diag.Range.Start.Line)] = true
 			}
 		}
 	} else {
-		// Just show the diagnostic lines
 		linesToShow = make(map[int]bool)
 		for _, diag := range diagnostics {
 			linesToShow[int(diag.Range.Start.Line)] = true
 		}
 	}
 
-	// Convert to line ranges
 	lineRanges := ConvertLinesToRanges(linesToShow, len(lines))
 
-	// Format with diagnostics summary in header
 	result := fileInfo
 	if len(diagSummaries) > 0 {
 		result += strings.Join(diagSummaries, "\n") + "\n"
 	}
 
-	// Format the content with ranges
 	if showLineNumbers {
 		result += "\n" + FormatLinesWithRanges(lines, lineRanges)
 	}
@@ -181,20 +264,4 @@ func GetDiagnosticsForSymbol(ctx context.Context, client *lsp.Client, filePath, 
 	}
 
 	return strings.Join(relevant, "\n"), nil
-}
-
-func waitForDiagnosticsDelay(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
