@@ -176,7 +176,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols. Each symbol now includes `trace` with `preferredSymbolName`, `symbolNameCandidates`, and ready-to-call `definition.symbolName` / `references.symbolName` bridge values.
-- `run_query`: Executa o motor de consulta v2 com varredura Delphi no workspace, shape estruturado de matches e compatibilidade legada.
+- `run_query`: Consulta estrutural tree-sitter Delphi 6 no workspace (`.pas`, `.dpr`, `.dpk`) com `node_type`, fallback textual, `captureName` e `symbolName`.
 
 ## Fluxo inicial recomendado
 
@@ -192,14 +192,14 @@ Exemplo de encadeamento: selecione `units[i].symbols[j].trace.definition.symbolN
 
 ## run_query
 
-Status atual: v2 entregue (baseline estável), ainda abaixo de SOTA estrutural.
+Status atual: v2 com busca estrutural tree-sitter Delphi 6 integrada no runtime Go (`third_party/tree-sitter-delphi6`).
 
-O `run_query` está disponível em uma versão v2 que amplia o contrato anterior. Ele realiza varredura textual determinística em arquivos Delphi do workspace (`.pas`, `.dpr`, `.dpk`), permite recorte estrito por arquivo e retorna matches em shape estruturado. O objetivo desta versão é garantir integração previsível para agentes e clientes sem quebrar compatibilidade com consumidores legados.
+O `run_query` varre arquivos Delphi do workspace (`.pas`, `.dpr`, `.dpk`), parseia com tree-sitter e retorna matches em JSON estruturado. Com `node_type` (ou `query` no formato de tipo de nó válido), executa query tree-sitter `(node_type) @match`. Sem `node_type`, consultas livres usam fallback textual: filtro por substring no texto dos nós nomeados da AST. Campos legados `file`, `line` e `text` permanecem por compatibilidade.
 
 ### Parâmetros
 
-- `query` (string, opcional): texto procurado nas linhas do arquivo. Se informado, é o valor principal usado na busca.
-- `node_type` (string, opcional): fallback usado quando `query` não for informado.
+- `query` (string, opcional): filtro textual adicional no conteúdo do nó quando informado junto com `node_type`; sozinho, pode ser consulta livre (fallback textual na AST) ou tipo de nó implícito quando corresponder a um `node_type` tree-sitter válido (ex.: `procedure_declaration`).
+- `node_type` (string, opcional): tipo de nó tree-sitter para query estrutural `(node_type) @match`; obrigatório quando `query` não é enviado.
 - `filePath` (string, opcional): caminho de arquivo a ser lido primeiro. Quando presente, deve apontar para um arquivo existente.
 - `strictFilePath` (boolean, opcional): quando `true`, a busca fica estritamente limitada a `filePath` e não faz fallback para outros arquivos.
 - `limit` (number, opcional): quantidade máxima de ocorrências retornadas. Valor padrão: `20`. Deve ser maior que `0`.
@@ -228,6 +228,8 @@ O resultado MCP é devolvido como texto contendo JSON com o formato abaixo:
       "endLine": 1,
       "endColumn": 35,
       "nodeType": "procedure_declaration",
+      "captureName": "match",
+      "symbolName": "UniqueProcedureDeclarationToken",
       "preview": "procedure UniqueProcedureDeclarationToken;",
       "file": "C:\\repo\\query-target.pas",
       "line": 1,
@@ -241,7 +243,9 @@ Campos atuais:
 
 - `query`: valor efetivamente usado na busca, após trim e fallback para `node_type` quando necessário.
 - `totalMatches`: quantidade retornada no payload atual.
-- `matches`: lista de objetos com campos estruturados (`filePath`, `startLine`, `startColumn`, `endLine`, `endColumn`, `nodeType`, `preview`).
+- `matches`: lista de objetos com campos estruturados (`filePath`, `startLine`, `startColumn`, `endLine`, `endColumn`, `nodeType`, `preview`, `captureName`, `symbolName`).
+- `captureName`: preenchido apenas em matches originados de captura explícita tree-sitter (`@match`).
+- `symbolName`: heurística para declarações de rotina, `unit`/`program`/`library` e `package` canônico em `.dpk` (ausente quando não aplicável).
 - `file`, `line`, `text`: campos legados mantidos por compatibilidade retroativa.
 
 ### Exemplos
@@ -272,7 +276,7 @@ Busca priorizando um arquivo específico:
 }
 ```
 
-Busca usando `node_type` como fallback quando `query` não é enviado:
+Busca estrutural por `node_type` (sem filtro textual adicional):
 
 ```json
 {
@@ -286,17 +290,17 @@ Busca usando `node_type` como fallback quando `query` não é enviado:
 
 ### Limitações atuais
 
-- Ainda não executa query tree-sitter real.
-- `nodeType` atual é inferido de forma textual (heurística), sem parser estrutural completo.
-- Ainda não retorna capturas tree-sitter, score semântico e contexto de AST completo.
-- O resultado v2 é textual-estruturado e determinístico, útil como baseline de contrato, não como busca estrutural SOTA.
+- Não aceita query tree-sitter arbitrária (apenas padrão `(node_type) @match` ou inferência implícita de tipo a partir de `query`).
+- Consultas livres sem `node_type` válido usam fallback textual por substring nos nós nomeados da AST (não varredura linha-a-linha isolada).
+- `captureName` só aparece em capturas explícitas; `symbolName` cobre apenas declarações suportadas (rotina, módulo, package `.dpk`).
+- Varredura limitada a `.pas`, `.dpr`, `.dpk` (sem `.inc`, `.pp`, `.lpr` — ver item de matriz de extensões no backlog).
+- Sem score semântico, sem DSL `build_query`/`adapt_query` e sem exportação de AST completa por match.
 
-### Próximos passos para a versão SOTA
+### Evoluções futuras (fora do escopo v2 atual)
 
-- Executar queries tree-sitter reais sobre Delphi.
-- Retornar matches estruturados com `range`, tipo de nó e capturas.
-- Permitir filtro estrito por arquivo, diretório e escopo sintático.
-- Evoluir o payload para cenários de auditoria, refactor assistido e navegação estrutural.
+- Queries tree-sitter customizadas e filtros por diretório/escopo sintático.
+- Alinhar extensões Delphi com `references` (`.inc`, `.pp`, `.lpr`).
+- Payload enriquecido para auditoria/refactor (ranges semânticos, scores).
 
 ## About
 

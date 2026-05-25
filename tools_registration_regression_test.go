@@ -1285,6 +1285,69 @@ func TestRegisterTools_RunQuery_IsRegisteredInToolsList(t *testing.T) {
 	}
 }
 
+func TestRegisterTools_RunQuery_ToolsListContractDocumentsStructuralAPI(t *testing.T) {
+	svc := newRegisteredTestMCPServer(t)
+	initializeTestMCPServer(t, svc)
+
+	listResp := handleTestMCPRequest(t, svc, mcp.MethodToolsList, map[string]any{}, 95)
+	var listResult mcp.ListToolsResult
+	decodeTestMCPResult(t, listResp.Result, &listResult)
+
+	var runQueryTool *mcp.Tool
+	for i := range listResult.Tools {
+		if listResult.Tools[i].Name == "run_query" {
+			runQueryTool = &listResult.Tools[i]
+			break
+		}
+	}
+	if runQueryTool == nil {
+		t.Fatal("expected run_query in tools/list for contract validation")
+	}
+
+	desc := strings.ToLower(runQueryTool.Description)
+	requiredInDescription := []string{
+		"node_type",
+		"tree-sitter",
+		"fallback",
+		"capturename",
+		"symbolname",
+	}
+	for _, term := range requiredInDescription {
+		if !strings.Contains(desc, term) {
+			t.Fatalf("expected run_query tools/list description to mention %q, got: %s", term, runQueryTool.Description)
+		}
+	}
+
+	schemaProps := runQueryTool.InputSchema.Properties
+	if len(schemaProps) == 0 {
+		t.Fatalf("expected run_query input schema properties map, got %#v", runQueryTool.InputSchema)
+	}
+
+	for _, propName := range []string{"query", "node_type"} {
+		rawProp, exists := schemaProps[propName]
+		if !exists {
+			t.Fatalf("expected run_query schema property %q", propName)
+		}
+		propMap, ok := rawProp.(map[string]any)
+		if !ok {
+			t.Fatalf("expected run_query schema property %q to be an object, got %#v", propName, rawProp)
+		}
+		propDesc, _ := propMap["description"].(string)
+		if strings.TrimSpace(propDesc) == "" {
+			t.Fatalf("expected run_query schema property %q to include description", propName)
+		}
+	}
+
+	nodeTypeProp, ok := schemaProps["node_type"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected node_type schema property object, got %#v", schemaProps["node_type"])
+	}
+	nodeTypeDesc, _ := nodeTypeProp["description"].(string)
+	if !strings.Contains(strings.ToLower(nodeTypeDesc), "tree-sitter") {
+		t.Fatalf("expected node_type schema description to mention tree-sitter, got: %s", nodeTypeDesc)
+	}
+}
+
 func TestRegisterTools_RunQuery_RequiresQueryOrNodeType(t *testing.T) {
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)

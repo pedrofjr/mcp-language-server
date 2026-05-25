@@ -2235,12 +2235,12 @@ func (s *mcpServer) registerTools() error {
 	// Sprint 3: run_query
 	s.mcpServer.AddTool(
 		mcp.NewTool("run_query",
-			mcp.WithDescription("Run a minimal deterministic textual query scan and return JSON results."),
+			mcp.WithDescription("run_query v2: Delphi workspace scan (.pas/.dpr/.dpk) via tree-sitter Delphi 6. Requires query and/or node_type. With node_type (or query-only matching a valid node type name), runs tree-sitter query `(node_type) @match` and returns JSON matches with nodeType, optional captureName (explicit captures only), and symbolName (routine/unit/package declarations). Without node_type, free-text query filters named AST nodes by substring (textual fallback). Invalid node_type returns a tree-sitter query error. Legacy fields file/line/text preserved."),
 			mcp.WithString("query",
-				mcp.Description("Text query used to match source lines."),
+				mcp.Description("Optional text filter on node content, or implicit node_type when it matches a valid tree-sitter node type name (lowercase + underscores)."),
 			),
 			mcp.WithString("node_type",
-				mcp.Description("Fallback node type when query is omitted."),
+				mcp.Description("Tree-sitter node type for structural query `(node_type) @match`; required when query is omitted."),
 			),
 			mcp.WithString("filePath",
 				mcp.Description("Optional file path to scan first. Must point to an existing file when provided."),
