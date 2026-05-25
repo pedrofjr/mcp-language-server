@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "workspace_root": "C:\\Users\\pedro\\Downloads\\Delphi_Oracle\\oracle-lsp\\test-fixtures\\synedit\\Demos"
+  },
+  "units": [
+    {
+      "id": "dmCommands",
+      "resolved": true,
+      "imports": [
+        "Classes",
+        "SysUtils",
+        "uHighlighterProcs"
+      ],
+      "importedBy": []
+    },
+    {
+      "id": "EditU2",
+      "resolved": true,
+      "imports": [
+        "Classes",
+        "SysUtils",
+        "uHighlighterProcs"
+      ],
+      "importedBy": []
+    },
+    {
+      "id": "frmExportMain",
+      "resolved": true,
+      "imports": [
+        "Classes",
+        "SysUtils",
+        "uHighlighterProcs"
+      ],
+      "importedBy": []
+    },
+    {
+      "id": "uHighlighterProcs",
+      "resolved": true,
+      "imports": [
+        "Classes"
+      ],
+      "importedBy": [
+        "dmCommands",
+        "EditU2",
+        "frmExportMain"
+      ]
+    },
+    {
+      "id": "uHighlighterProcs",
+      "resolved": true,
+      "imports": [
+        "Classes"
+      ],
+      "importedBy": [
+        "dmCommands",
+        "EditU2",
+        "frmExportMain"
+      ]
+    },
+    {
+      "id": "uHighlighterProcs",
+      "resolved": true,
+      "imports": [
+        "Classes"
+      ],
+      "importedBy": [
+        "dmCommands",
+        "EditU2",
+        "frmExportMain"
+      ]
+    },
+    {
+      "id": "uHighlighterProcs",
+      "resolved": true,
+      "imports": [
+        "Classes"
+      ],
+      "importedBy": [
+        "dmCommands",
+        "EditU2",
+        "frmExportMain"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "dmCommands",
+      "target": "Classes",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "dmCommands",
+      "target": "SysUtils",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "dmCommands",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "importedBy"
+    },
+    {
+      "source": "dmCommands",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "EditU2",
+      "target": "Classes",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "EditU2",
+      "target": "SysUtils",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "EditU2",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "importedBy"
+    },
+    {
+      "source": "EditU2",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "frmExportMain",
+      "target": "Classes",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "frmExportMain",
+      "target": "SysUtils",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "frmExportMain",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "importedBy"
+    },
+    {
+      "source": "frmExportMain",
+      "target": "uHighlighterProcs",
+      "type": "uses_unit",
+      "direction": "imports"
+    },
+    {
+      "source": "uHighlighterProcs",
+      "target": "Classes",
+      "type": "uses_unit",
+      "direction": "imports"
+    }
+  ]
+}

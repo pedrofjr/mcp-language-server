@@ -30,6 +30,9 @@ jobs:
       - name: Run Delphi structural tool tests
         run: go test ./internal/tools/... -run "RunQuery|BuildQuery" -count=1
 
+      - name: Run NFR representative Delphi corpus gate
+        run: go test . -run TestNFRGates_RepresentativeDelphiCorpusSuite -count=1
+
       - name: Install just
         run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 

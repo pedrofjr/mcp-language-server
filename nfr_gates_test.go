@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/isaacphi/mcp-language-server/internal/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -20,7 +23,137 @@ func TestNFRGates_CriticalHandlerTimeoutsMax15Seconds(t *testing.T) {
 	}
 }
 
-func TestNFRGates_RepresentativeLoadSuite_P95Under5Seconds(t *testing.T) {
+func TestNFRGates_RepresentativeDelphiCorpusSuite_P95Under5Seconds(t *testing.T) {
+	corpusRoot, err := resolveNFRCorpusRoot()
+	if err != nil {
+		t.Fatalf("resolveNFRCorpusRoot: %v", err)
+	}
+	stats, err := describeNFRCorpus(corpusRoot)
+	if err != nil {
+		t.Fatalf("describeNFRCorpus: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalWD)
+	})
+	if err := os.Chdir(corpusRoot); err != nil {
+		t.Fatalf("chdir corpus: %v", err)
+	}
+
+	sampleFile := stats.SampleFiles[0]
+	svc := newNFRCorpusMCPServer(t, corpusRoot, sampleFile, 50*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	sampleURI := string(protocol.URIFromPath(sampleFile))
+	loadCases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{
+			tool: "run_query",
+			args: map[string]any{
+				"node_type": "identifier",
+				"limit":     float64(20),
+			},
+		},
+		{
+			tool: "diagnostics",
+			args: map[string]any{
+				"filePath":        sampleFile,
+				"contextLines":    false,
+				"showLineNumbers": false,
+			},
+		},
+		{
+			tool: "semantic_search",
+			args: map[string]any{
+				"query": "procedure",
+				"limit": float64(10),
+			},
+		},
+		{
+			tool: "graph_query",
+			args: map[string]any{
+				"uri":       sampleURI,
+				"direction": "both",
+				"depth":     float64(1),
+			},
+		},
+	}
+
+	const samplesPerTool = 4
+	var durations []time.Duration
+	requestID := 9100
+
+	for _, tc := range loadCases {
+		for sample := 0; sample < samplesPerTool; sample++ {
+			requestID++
+			started := time.Now()
+			resp := handleTestMCPRequest(
+				t,
+				svc,
+				mcp.MethodToolsCall,
+				map[string]any{
+					"name":      tc.tool,
+					"arguments": tc.args,
+				},
+				requestID,
+			)
+			elapsed := time.Since(started)
+			durations = append(durations, elapsed)
+
+			resultBytes, err := json.Marshal(resp.Result)
+			if err != nil {
+				t.Fatalf("%s sample=%d: marshal result: %v", tc.tool, sample, err)
+			}
+			var callResult map[string]any
+			if err := json.Unmarshal(resultBytes, &callResult); err != nil {
+				t.Fatalf("%s sample=%d: decode result: %v", tc.tool, sample, err)
+			}
+			if isError, _ := callResult["isError"].(bool); isError {
+				t.Fatalf("%s sample=%d: expected success in Delphi corpus suite, got %s", tc.tool, sample, string(resultBytes))
+			}
+		}
+	}
+
+	p95 := nfrPercentileDuration(durations, 95)
+	t.Log(formatNFRCorpusReport(stats, len(durations), p95.String()))
+
+	if p95 > NFRRepresentativeLoadP95Max {
+		t.Fatalf(
+			"Delphi representative corpus p95=%s exceeds gate %s (corpus_files=%d samples=%d)",
+			p95,
+			NFRRepresentativeLoadP95Max,
+			stats.DelphiFileCount,
+			len(durations),
+		)
+	}
+}
+
+func newNFRCorpusMCPServer(t *testing.T, corpusRoot, samplePAS string, delay time.Duration) *mcpServer {
+	t.Helper()
+
+	client := newRegisterToolsRequestContextFakeLSPClientWithDelay(t, corpusRoot, samplePAS, delay)
+
+	svc := &mcpServer{
+		ctx:       context.Background(),
+		lspClient: client,
+		config:    config{workspaceDir: corpusRoot},
+	}
+	svc.mcpServer = newMCPServer(corpusRoot)
+
+	if err := svc.registerTools(); err != nil {
+		t.Fatalf("registerTools() returned error: %v", err)
+	}
+
+	return svc
+}
+
+func TestNFRGates_RepresentativeFakeLSPLoadSuite_P95Under5Seconds(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 100*time.Millisecond)
 	initializeTestMCPServer(t, svc)
 
