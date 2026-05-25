@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -33,47 +34,14 @@ type symbolBodyRange struct {
 	endLine   int // 1-indexed, line with "end;"
 }
 
-// findSymbolBodyRange localiza o begin..end de uma rotina Delphi pelo nome qualificado.
-// symbolName pode ser "TFoo.Bar" ou simplesmente "Bar".
-// Retorna nil se não encontrar.
+// findSymbolBodyRange localiza o begin..end de uma rotina Delphi via parser estrutural
+// (sanitizePascalSearchLine + findDelphiRoutineBlockEnd). Retorna nil se não encontrar.
 func findSymbolBodyRange(src, symbolName string) *symbolBodyRange {
-	startLine := findSymbolStartLine(src, symbolName)
-	if startLine < 0 {
+	bounded, err := resolveDelphiRoutineBoundaries(src, symbolName)
+	if err != nil {
 		return nil
 	}
-
-	lines := strings.Split(src, "\n")
-	depth := 0
-	beginFound := false
-	beginLine := -1
-
-	for i := startLine - 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(strings.ToLower(lines[i]))
-		// Ignorar comentários de linha simples
-		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "{") {
-			continue
-		}
-		words := strings.Fields(trimmed)
-		for _, w := range words {
-			w = strings.Trim(w, ";,():")
-			switch w {
-			case "begin":
-				if !beginFound {
-					beginFound = true
-					beginLine = i + 1 // 1-indexed
-				}
-				depth++
-			case "end":
-				if depth > 0 {
-					depth--
-					if depth == 0 && beginFound {
-						return &symbolBodyRange{beginLine: beginLine, endLine: i + 1}
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return &symbolBodyRange{beginLine: bounded.beginLine, endLine: bounded.endLine}
 }
 
 // findSymbolInnerBodyRange retorna o intervalo interno (linhas entre begin e end)
@@ -106,27 +74,13 @@ func findSymbolInnerBodyRange(src, symbolName string) *symbolBodyRange {
 }
 
 // findSymbolStartLine retorna a linha (1-indexed) onde a rotina é declarada.
-// Retorna -1 se não encontrar.
+// Retorna -1 se não encontrar ou se o símbolo for ambíguo.
 func findSymbolStartLine(src, symbolName string) int {
-	lines := strings.Split(src, "\n")
-	simpleName := symbolName
-	if idx := strings.LastIndex(symbolName, "."); idx >= 0 {
-		simpleName = symbolName[idx+1:]
+	bounded, err := resolveDelphiRoutineBoundaries(src, symbolName)
+	if err != nil {
+		return -1
 	}
-	lowerSimple := strings.ToLower(simpleName)
-	lowerFull := strings.ToLower(symbolName)
-
-	for i, line := range lines {
-		lower := strings.ToLower(strings.TrimSpace(line))
-		if (strings.HasPrefix(lower, "procedure ") ||
-			strings.HasPrefix(lower, "function ") ||
-			strings.HasPrefix(lower, "constructor ") ||
-			strings.HasPrefix(lower, "destructor ")) &&
-			(strings.Contains(lower, lowerSimple) || strings.Contains(lower, lowerFull)) {
-			return i + 1 // 1-indexed
-		}
-	}
-	return -1
+	return bounded.headerLine
 }
 
 // findSymbolEndLine retorna a linha (1-indexed) do "end;" da rotina.
@@ -151,14 +105,23 @@ func ReplaceSymbolBody(ctx context.Context, client *lsp.Client, filePath, symbol
 		return "", fmt.Errorf("could not read file: %v", err)
 	}
 
-	r := findSymbolInnerBodyRange(content, symbolName)
-	if r == nil {
+	bounded, err := resolveSymbolRoutineBoundaries(ctx, client, normalizedPath, symbolName, content)
+	if err != nil {
+		if errors.Is(err, ErrDelphiSymbolAmbiguous) {
+			return "", fmt.Errorf("symbol %q is ambiguous; use a qualified name", symbolName)
+		}
+		return "", fmt.Errorf("symbol %q not found or has no begin..end block", symbolName)
+	}
+
+	innerBegin := bounded.beginLine + 1
+	innerEnd := bounded.endLine - 1
+	if innerBegin > innerEnd {
 		return "", fmt.Errorf("symbol %q not found or has no begin..end block", symbolName)
 	}
 
 	edit := TextEdit{
-		StartLine: r.beginLine,
-		EndLine:   r.endLine,
+		StartLine: innerBegin,
+		EndLine:   innerEnd,
 		NewText:   newBody,
 	}
 	return applySymbolEditWithRollback(
@@ -203,10 +166,14 @@ func InsertAfterSymbol(ctx context.Context, client *lsp.Client, filePath, symbol
 		return "", fmt.Errorf("could not read file: %v", err)
 	}
 
-	endLine := findSymbolEndLine(content, symbolName)
-	if endLine < 0 {
+	bounded, err := resolveDelphiRoutineBoundaries(content, symbolName)
+	if err != nil {
+		if errors.Is(err, ErrDelphiSymbolAmbiguous) {
+			return "", fmt.Errorf("symbol %q is ambiguous; use a qualified name", symbolName)
+		}
 		return "", fmt.Errorf("symbol %q not found", symbolName)
 	}
+	endLine := bounded.endLine
 
 	lines := strings.Split(content, "\n")
 	insertAt := endLine + 1
@@ -240,10 +207,14 @@ func InsertBeforeSymbol(ctx context.Context, client *lsp.Client, filePath, symbo
 		return "", fmt.Errorf("could not read file: %v", err)
 	}
 
-	startLine := findSymbolStartLine(content, symbolName)
-	if startLine < 0 {
+	bounded, err := resolveDelphiRoutineBoundaries(content, symbolName)
+	if err != nil {
+		if errors.Is(err, ErrDelphiSymbolAmbiguous) {
+			return "", fmt.Errorf("symbol %q is ambiguous; use a qualified name", symbolName)
+		}
 		return "", fmt.Errorf("symbol %q not found", symbolName)
 	}
+	startLine := bounded.headerLine
 
 	edit := TextEdit{
 		StartLine: startLine,
