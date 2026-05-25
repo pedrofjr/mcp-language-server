@@ -89,6 +89,12 @@ func opRecoveryForToken(token string) string {
 	case OpDefinitionDeadline, OpReferencesDeadline, OpRunQueryDeadline:
 		return "1) retry on a smaller scope (single file/symbol); 2) check LSP load; 3) increase client deadline only if policy allows"
 	default:
+		if strings.HasSuffix(token, "_CANCELED") {
+			return "1) avoid canceling in-flight requests; 2) retry with a fresh tools/call; 3) narrow file/symbol scope if needed"
+		}
+		if strings.HasSuffix(token, "_DEADLINE") {
+			return "1) retry on a smaller scope (single file/symbol); 2) check LSP load; 3) increase client deadline only if policy allows"
+		}
 		return ""
 	}
 }

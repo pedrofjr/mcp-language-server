@@ -195,6 +195,161 @@ func TestRegisterTools_References_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
 	assertToolCallResultContainsDeadlineExceededToolError(t, callResp, "references")
 }
 
+func TestRegisterTools_RemainingLSPBackedTools_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
+	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
+	initializeTestMCPServer(t, svc)
+
+	fixturePath := requestContextFixturePath(t, svc)
+
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cases := []struct {
+		name string
+		args map[string]any
+		id   int
+	}{
+		{
+			name: "diagnostics",
+			args: map[string]any{"filePath": fixturePath},
+			id:   640,
+		},
+		{
+			name: "hover",
+			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
+			id:   641,
+		},
+		{
+			name: "semantic_search",
+			args: map[string]any{"query": "TargetSymbol"},
+			id:   642,
+		},
+		{
+			name: "code_actions",
+			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
+			id:   643,
+		},
+		{
+			name: "get_symbols_overview",
+			args: map[string]any{"query": "TargetSymbol"},
+			id:   644,
+		},
+		{
+			name: "safe_delete_symbol",
+			args: map[string]any{"filePath": fixturePath, "symbolName": "ZZZ_DEL_Only", "force": false},
+			id:   645,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			callResp := handleTestMCPRequestWithContext(
+				t,
+				svc,
+				requestCtx,
+				mcp.MethodToolsCall,
+				map[string]any{
+					"name":      tc.name,
+					"arguments": tc.args,
+				},
+				tc.id,
+			)
+
+			assertToolCallResultContainsDeterministicToolError(
+				t,
+				callResp,
+				fmt.Sprintf("failed: %s canceled: context canceled", tc.name),
+				opTokenForToolEvent(tc.name, "CANCELED"),
+			)
+		})
+	}
+}
+
+func TestRegisterTools_RemainingLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
+	originalTimeout := criticalLSPHandlerTimeout
+	criticalLSPHandlerTimeout = 100 * time.Millisecond
+	t.Cleanup(func() {
+		criticalLSPHandlerTimeout = originalTimeout
+	})
+
+	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	fixturePath := requestContextFixturePath(t, svc)
+	requestCtx := context.Background()
+
+	cases := []struct {
+		name string
+		args map[string]any
+		id   int
+	}{
+		{
+			name: "diagnostics",
+			args: map[string]any{"filePath": fixturePath},
+			id:   650,
+		},
+		{
+			name: "hover",
+			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
+			id:   651,
+		},
+		{
+			name: "semantic_search",
+			args: map[string]any{"query": "TargetSymbol"},
+			id:   652,
+		},
+		{
+			name: "code_actions",
+			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
+			id:   653,
+		},
+		{
+			name: "get_symbols_overview",
+			args: map[string]any{"query": "TargetSymbol"},
+			id:   654,
+		},
+		{
+			name: "safe_delete_symbol",
+			args: map[string]any{"filePath": fixturePath, "symbolName": "ZZZ_DEL_Only", "force": false},
+			id:   655,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			callResp := handleTestMCPRequestWithContext(
+				t,
+				svc,
+				requestCtx,
+				mcp.MethodToolsCall,
+				map[string]any{
+					"name":      tc.name,
+					"arguments": tc.args,
+				},
+				tc.id,
+			)
+			elapsed := time.Since(start)
+
+			assertToolCallResultContainsDeadlineExceededToolError(t, callResp, tc.name)
+			if elapsed >= 500*time.Millisecond {
+				t.Fatalf("expected %s to fail before global timeout; elapsed=%s", tc.name, elapsed)
+			}
+		})
+	}
+}
+
+func requestContextFixturePath(t *testing.T, svc *mcpServer) string {
+	t.Helper()
+
+	workspaceDir := svc.config.workspaceDir
+	if workspaceDir == "" {
+		t.Fatal("expected workspaceDir on test MCP server")
+	}
+
+	return filepath.Join(workspaceDir, "Unit1.pas")
+}
+
 func TestRegisterTools_DefinitionAndReferences_RequestDeadlinePrecedence_WhenSmallerThanLocalTimeout(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
 	initializeTestMCPServer(t, svc)
@@ -239,14 +394,18 @@ func newRegisteredTestMCPServerWithContextFakeLSPDelay(t *testing.T, fakeDelay t
 
 	workspaceDir := t.TempDir()
 	fixturePath := filepath.Join(workspaceDir, "Unit1.pas")
-	fixtureContent := "unit Unit1;\ninterface\nprocedure TargetSymbol;\nimplementation\nprocedure TargetSymbol; begin end;\nend.\n"
+	fixtureContent := "unit Unit1;\ninterface\nprocedure TargetSymbol;\nprocedure ZZZ_DEL_Only;\nimplementation\nprocedure TargetSymbolImpl; begin end;\nend.\n"
 	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0o644); err != nil {
 		t.Fatalf("failed to create Delphi fixture for request-context tests: %v", err)
 	}
 
 	client := newRegisterToolsRequestContextFakeLSPClientWithDelay(t, workspaceDir, fixturePath, fakeDelay)
 
-	svc := &mcpServer{ctx: context.Background(), lspClient: client}
+	svc := &mcpServer{
+		ctx:       context.Background(),
+		lspClient: client,
+		config:    config{workspaceDir: workspaceDir},
+	}
 	svc.mcpServer = newMCPServer(workspaceDir)
 
 	if err := svc.registerTools(); err != nil {
@@ -339,10 +498,36 @@ func runRegisterToolsRequestContextFakeLSP(stdin *os.File, stdout *os.File) {
 		case "initialize":
 			capabilities := map[string]any{
 				"workspaceSymbolProvider": true,
+				"hoverProvider":           true,
+				"codeActionProvider":      true,
 			}
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"capabilities": capabilities}, nil)
 		case "initialized":
 			continue
+		case "textDocument/didOpen":
+			if msg.ID != nil && msg.ID.Value != nil {
+				sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{}, nil)
+			}
+		case "textDocument/hover":
+			time.Sleep(delay)
+			hover := map[string]any{
+				"contents": map[string]any{
+					"kind":  "plaintext",
+					"value": "hover ok",
+				},
+			}
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, hover, nil)
+		case "textDocument/diagnostic":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{
+				"items": []map[string]any{},
+			}, nil)
+		case "textDocument/codeAction":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, []map[string]any{}, nil)
+		case "custom/semanticSearch":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, []map[string]any{}, nil)
 		case "workspace/symbol":
 			time.Sleep(delay)
 
@@ -452,7 +637,7 @@ func assertToolCallResultContainsDeadlineExceededToolError(t *testing.T, respons
 		t.Fatalf("expected %s deadline/timeout error to include actionable marker 'action:', got %s", toolName, string(resultBytes))
 	}
 
-	opToken := "OP_" + strings.ToUpper(toolName) + "_DEADLINE"
+	opToken := opTokenForToolEvent(toolName, "DEADLINE")
 	if !strings.Contains(string(resultBytes), opToken) {
 		t.Fatalf("expected %s deadline error to include operational prefix %q, got %s", toolName, opToken, string(resultBytes))
 	}

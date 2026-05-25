@@ -536,41 +536,6 @@ func runQueryContextCheckpoint(ctx context.Context) error {
 
 var runQueryCheckpointHook func()
 
-var runQueryHandlerTimeout = 15 * time.Second
-
-var definitionReferencesHandlerTimeout = 15 * time.Second
-
-var opCanceledTokens = map[string]string{
-	"definition": OpDefinitionCanceled,
-	"references": OpReferencesCanceled,
-}
-
-var opDeadlineTokens = map[string]string{
-	"definition": OpDefinitionDeadline,
-	"references": OpReferencesDeadline,
-}
-
-func deterministicDefinitionReferencesContextError(toolName string, opCtx context.Context, err error) *mcp.CallToolResult {
-	if errors.Is(err, context.Canceled) || (opCtx != nil && errors.Is(opCtx.Err(), context.Canceled)) {
-		token := opCanceledTokens[toolName]
-		msg := fmt.Sprintf("failed: %s canceled: context canceled | action: retry when context is active", toolName)
-		if token != "" {
-			msg = opErrMsgWithRecovery(token, msg)
-		}
-		return mcp.NewToolResultError(msg)
-	}
-
-	if errors.Is(err, context.DeadlineExceeded) || (opCtx != nil && errors.Is(opCtx.Err(), context.DeadlineExceeded)) {
-		token := opDeadlineTokens[toolName]
-		msg := fmt.Sprintf("failed: %s deadline exceeded: context deadline exceeded | action: retry with longer timeout", toolName)
-		if token != "" {
-			msg = opErrMsgWithRecovery(token, msg)
-		}
-		return mcp.NewToolResultError(msg)
-	}
-
-	return nil
-}
 
 func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	if ctx == nil {
@@ -1074,10 +1039,13 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing diagnostics for file: %s", filePath)
-		text, err := tools.GetDiagnosticsForFile(s.ctx, s.lspClient, filePath, contextLines, showLineNumbers)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		text, err := tools.GetDiagnosticsForFile(opCtx, s.lspClient, filePath, contextLines, showLineNumbers)
 		if err != nil {
 			coreLogger.Error("Failed to get diagnostics: %v", err)
-			return OpToolFailedError("diagnostics", err.Error(), "verify filePath and LSP availability, then retry")
+			return handleLSPBackedToolError("diagnostics", opCtx, err, "verify filePath and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1191,10 +1159,13 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing hover for file: %s line: %d column: %d", filePath, line, column)
-		text, err := tools.GetHoverInfo(s.ctx, s.lspClient, filePath, line, column)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		text, err := tools.GetHoverInfo(opCtx, s.lspClient, filePath, line, column)
 		if err != nil {
 			coreLogger.Error("Failed to get hover information: %v", err)
-			return OpToolFailedError("hover", err.Error(), "verify filePath, line/column and LSP availability, then retry")
+			return handleLSPBackedToolError("hover", opCtx, err, "verify filePath, line/column and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1292,20 +1263,26 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional filter string forwarded to workspace/symbol. Whitespace-only values are trimmed to empty."),
 			),
 		),
-		withToolLogging("get_symbols_overview", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			queryRaw := req.Params.Arguments["query"]
-			if queryRaw != nil {
+		withToolLogging("get_symbols_overview", withPreToolValidation(func(req mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
+			if queryRaw := req.Params.Arguments["query"]; queryRaw != nil {
 				if _, ok := queryRaw.(string); !ok {
-					return OpValidationError("query must be a string")
+					result, _ := OpValidationError("query must be a string")
+					return result, true
 				}
 			}
-			query, _ := queryRaw.(string)
-			result, err := tools.GetSymbolsOverview(s.ctx, s.lspClient, query)
+			return nil, false
+		}, withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query, _ := req.Params.Arguments["query"].(string)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetSymbolsOverview(opCtx, s.lspClient, query)
 			if err != nil {
-				return OpToolFailedError("get_symbols_overview", err.Error(), "check LSP availability and query value, then retry")
+				return handleLSPBackedToolError("get_symbols_overview", opCtx, err, "check LSP availability and query value, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		}),
+		}))),
 	)
 
 	// ast_summary
@@ -1606,17 +1583,19 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Optional positive integer result limit. Defaults to 20."),
 			),
 		),
-		withToolLogging("semantic_search", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withToolLogging("semantic_search", withPreToolValidation(func(req mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
 			query, ok := req.Params.Arguments["query"].(string)
 			if !ok || strings.TrimSpace(query) == "" {
-				return OpValidationError("query must be a non-empty string")
+				result, _ := OpValidationError("query must be a non-empty string")
+				return result, true
 			}
 
 			scope := "workspace"
 			if scopeRaw, exists := req.Params.Arguments["scope"]; exists && scopeRaw != nil {
 				scopeText, ok := scopeRaw.(string)
 				if !ok {
-					return OpValidationError("scope must be 'workspace' or 'file'")
+					result, _ := OpValidationError("scope must be 'workspace' or 'file'")
+					return result, true
 				}
 				scopeText = strings.TrimSpace(scopeText)
 				if scopeText != "" {
@@ -1625,23 +1604,27 @@ func (s *mcpServer) registerTools() error {
 			}
 
 			if scope != "workspace" && scope != "file" {
-				return OpValidationError("scope must be 'workspace' or 'file'")
+				result, _ := OpValidationError("scope must be 'workspace' or 'file'")
+				return result, true
 			}
 
-			uri := ""
-			if uriRaw, exists := req.Params.Arguments["uri"]; exists && uriRaw != nil {
+			if scope == "file" {
+				uriRaw, exists := req.Params.Arguments["uri"]
+				if !exists || uriRaw == nil {
+					result, _ := OpValidationError("uri is required when scope='file'")
+					return result, true
+				}
 				uriText, ok := uriRaw.(string)
 				if !ok {
-					return OpValidationError("uri must be a string")
+					result, _ := OpValidationError("uri must be a string")
+					return result, true
 				}
-				uri = strings.TrimSpace(uriText)
+				if strings.TrimSpace(uriText) == "" {
+					result, _ := OpValidationError("uri is required when scope='file'")
+					return result, true
+				}
 			}
 
-			if scope == "file" && uri == "" {
-				return OpValidationError("uri is required when scope='file'")
-			}
-
-			limit := 20
 			if limitRaw, exists := req.Params.Arguments["limit"]; exists && limitRaw != nil {
 				var limitNumber float64
 				switch v := limitRaw.(type) {
@@ -1650,22 +1633,54 @@ func (s *mcpServer) registerTools() error {
 				case int:
 					limitNumber = float64(v)
 				default:
-					return OpValidationError("limit must be a positive integer")
+					result, _ := OpValidationError("limit must be a positive integer")
+					return result, true
 				}
 
 				if limitNumber <= 0 || limitNumber != math.Trunc(limitNumber) {
-					return OpValidationError("limit must be a positive integer")
+					result, _ := OpValidationError("limit must be a positive integer")
+					return result, true
 				}
-
-				limit = int(limitNumber)
 			}
 
-			result, err := tools.GetSemanticSearch(s.ctx, s.lspClient, query, scope, uri, limit)
+			return nil, false
+		}, withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query := req.Params.Arguments["query"].(string)
+
+			scope := "workspace"
+			if scopeRaw, exists := req.Params.Arguments["scope"]; exists && scopeRaw != nil {
+				scopeText, _ := scopeRaw.(string)
+				scopeText = strings.TrimSpace(scopeText)
+				if scopeText != "" {
+					scope = scopeText
+				}
+			}
+
+			uri := ""
+			if uriRaw, exists := req.Params.Arguments["uri"]; exists && uriRaw != nil {
+				uri, _ = uriRaw.(string)
+				uri = strings.TrimSpace(uri)
+			}
+
+			limit := 20
+			if limitRaw, exists := req.Params.Arguments["limit"]; exists && limitRaw != nil {
+				switch v := limitRaw.(type) {
+				case float64:
+					limit = int(v)
+				case int:
+					limit = v
+				}
+			}
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetSemanticSearch(opCtx, s.lspClient, query, scope, uri, limit)
 			if err != nil {
-				return OpToolFailedError("semantic_search", err.Error(), "verify query, scope/uri and LSP semantic index, then retry")
+				return handleLSPBackedToolError("semantic_search", opCtx, err, "verify query, scope/uri and LSP semantic index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		}),
+		}))),
 	)
 
 	// code_actions
@@ -1766,9 +1781,12 @@ func (s *mcpServer) registerTools() error {
 				includeDiagnostics = inclRaw.(bool)
 			}
 
-			text, err := tools.GetCodeActions(s.ctx, s.lspClient, filePath, line, column, only, includeDiagnostics)
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			text, err := tools.GetCodeActions(opCtx, s.lspClient, filePath, line, column, only, includeDiagnostics)
 			if err != nil {
-				return OpToolFailedError("code_actions", err.Error(), "verify filePath, position and LSP availability, then retry")
+				return handleLSPBackedToolError("code_actions", opCtx, err, "verify filePath, position and LSP availability, then retry")
 			}
 			return mcp.NewToolResultText(text), nil
 		}))),
@@ -2005,8 +2023,14 @@ func (s *mcpServer) registerTools() error {
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 		force, _ := request.Params.Arguments["force"].(bool)
 
-		result, err := tools.SafeDeleteSymbol(s.ctx, s.lspClient, filePath, symbolName, force)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		result, err := tools.SafeDeleteSymbol(opCtx, s.lspClient, filePath, symbolName, force)
 		if err != nil {
+			if deterministic := deterministicHandlerContextError("safe_delete_symbol", opCtx, err); deterministic != nil {
+				return deterministic, nil
+			}
 			return OpErrorFromDomain("safe_delete_symbol", err, "verify symbol has no blocking references or set force=true")
 		}
 		return mcp.NewToolResultText(result), nil

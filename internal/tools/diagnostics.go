@@ -31,9 +31,11 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 		return "", fmt.Errorf("could not open file: %v", err)
 	}
 
-	// Wait for diagnostics
-	// TODO: wait for notification
-	time.Sleep(time.Second * 3)
+	// Wait for diagnostics (bounded by request context).
+	// TODO: wait for notification instead of fixed delay.
+	if err := waitForDiagnosticsDelay(ctx, 3*time.Second); err != nil {
+		return "", err
+	}
 
 	// Convert the file path to URI format
 	uri := protocol.URIFromPath(normalizedPath)
@@ -179,4 +181,20 @@ func GetDiagnosticsForSymbol(ctx context.Context, client *lsp.Client, filePath, 
 	}
 
 	return strings.Join(relevant, "\n"), nil
+}
+
+func waitForDiagnosticsDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
