@@ -394,7 +394,7 @@ func newRegisteredTestMCPServerWithContextFakeLSPDelay(t *testing.T, fakeDelay t
 
 	workspaceDir := t.TempDir()
 	fixturePath := filepath.Join(workspaceDir, "Unit1.pas")
-	fixtureContent := "unit Unit1;\ninterface\nprocedure TargetSymbol;\nprocedure ZZZ_DEL_Only;\nimplementation\nprocedure TargetSymbolImpl; begin end;\nend.\n"
+	fixtureContent := "unit Unit1;\ninterface\nprocedure TargetSymbol;\nimplementation\nprocedure TargetSymbolImpl; begin end;\nprocedure ZZZ_DEL_Only; begin end;\nend.\n"
 	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0o644); err != nil {
 		t.Fatalf("failed to create Delphi fixture for request-context tests: %v", err)
 	}
