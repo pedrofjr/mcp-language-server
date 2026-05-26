@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/isaacphi/mcp-language-server/internal/protocol"
+	"github.com/isaacphi/mcp-language-server/internal/tools"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -20,6 +22,84 @@ func TestNFRGates_CriticalHandlerTimeoutsMax15Seconds(t *testing.T) {
 	}
 	if definitionReferencesHandlerTimeout != NFRCriticalOperationTimeoutMax {
 		t.Fatalf("definitionReferencesHandlerTimeout=%s, want %s", definitionReferencesHandlerTimeout, NFRCriticalOperationTimeoutMax)
+	}
+}
+
+func TestNFRGates_DelphiExtensionMatrixMatchesWorkspaceContract(t *testing.T) {
+	root := filepath.Join("testdata", "nfr-delphi-corpus")
+	if err := ensureNFRCorpusMatrixExtensions(root); err != nil {
+		t.Fatalf("ensure matrix fixtures: %v", err)
+	}
+	stats, err := describeNFRCorpus(root)
+	if err != nil {
+		t.Fatalf("describe corpus: %v", err)
+	}
+
+	for ext, count := range stats.FilesByExtension {
+		if count < 1 {
+			continue
+		}
+		if !tools.IsDelphiWorkspaceSourceFile("fixture" + ext) {
+			t.Fatalf("corpus extension %q not in DelphiWorkspaceExtensions matrix", ext)
+		}
+	}
+	for _, required := range []string{".inc", ".pp", ".lpr", ".pas", ".dpr"} {
+		if stats.FilesByExtension[required] < 1 {
+			t.Fatalf("corpus must include %s for matrix gate; by_ext=%v", required, stats.FilesByExtension)
+		}
+	}
+	if stats.DelphiFileCount < 4 {
+		t.Fatalf("corpus must have multiple Delphi sources; got=%d by_ext=%v", stats.DelphiFileCount, stats.FilesByExtension)
+	}
+}
+
+func TestNFRGates_DelphiExtensionMatrixGate(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureNFRCorpusMatrixExtensions(root); err != nil {
+		t.Fatalf("ensure matrix fixtures: %v", err)
+	}
+
+	incPath, ok := nfrCorpusIncPath(NFRCorpusStats{Root: root, FilesByExtension: map[string]int{".inc": 1}})
+	if !ok {
+		t.Fatal("expected .inc path in matrix corpus")
+	}
+
+	fragment, err := os.ReadFile(incPath)
+	if err != nil {
+		t.Fatalf("read inc fragment: %v", err)
+	}
+	if !strings.Contains(string(fragment), "NfrMatrixGateIncToken") {
+		t.Fatalf("inc fragment must contain NfrMatrixGateIncToken for structural match")
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalWD) })
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	svc := newNFRCorpusMCPServer(t, root, incPath, 50*time.Millisecond)
+	initializeTestMCPServer(t, svc)
+
+	resp := handleTestMCPRequest(t, svc, mcp.MethodToolsCall, map[string]any{
+		"name": "run_query",
+		"arguments": map[string]any{
+			"query":          "NfrMatrixGateIncToken",
+			"file_path":      incPath,
+			"max_results":    5,
+			"min_confidence": 0.1,
+		},
+	}, 1)
+
+	payload, isError := toolCallResultPayload(t, resp)
+	if isError {
+		t.Fatalf("run_query on .inc must succeed, got error: %s", payload)
+	}
+	if !strings.Contains(strings.ToLower(payload), "nfrmatrixgateinctoken") {
+		t.Fatalf("run_query payload should mention token: %s", payload)
 	}
 }
 
@@ -213,6 +293,8 @@ func TestNFRGates_RepresentativeFakeLSPLoadSuite_P95Under5Seconds(t *testing.T) 
 }
 
 func TestNFRGates_CriticalToolsOperationalErrorCoverageAtLeast95Percent(t *testing.T) {
+	t.Setenv("ORACLE_MEMORY_DIR", t.TempDir())
+
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)
 

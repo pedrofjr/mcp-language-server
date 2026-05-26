@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	ErrDelphiSymbolNotFound    = errors.New("delphi symbol not found")
-	ErrDelphiSymbolAmbiguous   = errors.New("delphi symbol ambiguous")
+	ErrDelphiSymbolNotFound  = errors.New("delphi symbol not found")
+	ErrDelphiSymbolAmbiguous = errors.New("delphi symbol ambiguous")
 )
 
 type delphiRoutineBoundaries struct {

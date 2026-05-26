@@ -1,0 +1,3 @@
+program NfrMatrixGatePp;
+begin
+end.

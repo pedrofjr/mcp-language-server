@@ -282,9 +282,9 @@ func TestMemoryValidationErrorMessagePattern_EmptyTitleOrID(t *testing.T) {
 	pattern := regexp.MustCompile(`campo \S+ e obrigatorio e nao pode ser vazio`)
 
 	cases := []struct {
-		name    string
-		getErr  func() error
-		input   string
+		name   string
+		getErr func() error
+		input  string
 	}{
 		{
 			name:  "MemoryWrite com title vazio",
@@ -604,23 +604,23 @@ func TestMemorySystem_ConcurrentAccessIsRaceFree(t *testing.T) {
 
 // CT-S2-MCP-CORRUPTED: memoria com JSON invalido retorna erro gracioso (sem panic)
 func TestMemorySystem_CorruptedJSONReturnsGracefulError(t *testing.T) {
-dir := t.TempDir()
-t.Setenv("ORACLE_MEMORY_DIR", dir)
+	dir := t.TempDir()
+	t.Setenv("ORACLE_MEMORY_DIR", dir)
 
-// Escrever JSON invalido diretamente no arquivo de memoria
-if err := os.WriteFile(filepath.Join(dir, "memory.json"), []byte("{invalid json}"), 0o600); err != nil {
-t.Fatalf("nao foi possivel escrever arquivo corrompido: %v", err)
-}
+	// Escrever JSON invalido diretamente no arquivo de memoria
+	if err := os.WriteFile(filepath.Join(dir, "memory.json"), []byte("{invalid json}"), 0o600); err != nil {
+		t.Fatalf("nao foi possivel escrever arquivo corrompido: %v", err)
+	}
 
-// MemoryList deve retornar error nao-nil, nunca panic
-_, err := MemoryList("")
-if err == nil {
-t.Error("MemoryList com JSON corrompido deveria retornar erro, obteve nil")
-}
+	// MemoryList deve retornar error nao-nil, nunca panic
+	_, err := MemoryList("")
+	if err == nil {
+		t.Error("MemoryList com JSON corrompido deveria retornar erro, obteve nil")
+	}
 
-// MemoryRead deve retornar error nao-nil, nunca panic
-_, err = MemoryRead("qualquer-id")
-if err == nil {
-t.Error("MemoryRead com JSON corrompido deveria retornar erro, obteve nil")
-}
+	// MemoryRead deve retornar error nao-nil, nunca panic
+	_, err = MemoryRead("qualquer-id")
+	if err == nil {
+		t.Error("MemoryRead com JSON corrompido deveria retornar erro, obteve nil")
+	}
 }

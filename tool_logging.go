@@ -10,7 +10,7 @@ import (
 
 // Prefixos operacionais estáveis para caminhos críticos de erro.
 const (
-	OpLSPUnavailable    = "OP_LSP_UNAVAILABLE"
+	OpLSPUnavailable     = "OP_LSP_UNAVAILABLE"
 	OpDefinitionCanceled = "OP_DEFINITION_CANCELED"
 	OpDefinitionDeadline = "OP_DEFINITION_DEADLINE"
 	OpReferencesCanceled = "OP_REFERENCES_CANCELED"

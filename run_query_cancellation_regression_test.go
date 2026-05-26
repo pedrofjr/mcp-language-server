@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sync/atomic"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 

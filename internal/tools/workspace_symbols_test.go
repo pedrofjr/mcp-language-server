@@ -116,7 +116,7 @@ func runWorkspaceSymbolsFakeLSP(stdin *os.File, stdout *os.File) {
 						},
 					},
 					"containerName": "SysUtils",
-					"data": map[string]any{"isStub": true},
+					"data":          map[string]any{"isStub": true},
 				},
 			}
 			sendWorkspaceSymbolsFakeResponse(writer, msg.ID, result, nil)
