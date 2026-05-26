@@ -505,6 +505,13 @@ func runRegisterToolsRequestContextFakeLSP(stdin *os.File, stdout *os.File) {
 			time.Sleep(delay)
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"unit": "Unit1"}, nil)
 		case "custom/dependencyTree":
+			if registerToolsFakeLSPParamsForceError(msg) {
+				sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, nil, &lsp.ResponseError{
+					Code:    -32603,
+					Message: "forced NFR LSP error",
+				})
+				break
+			}
 			time.Sleep(delay)
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"tree": map[string]any{}}, nil)
 		case "custom/graph/neighbors":
@@ -514,6 +521,13 @@ func runRegisterToolsRequestContextFakeLSP(stdin *os.File, stdout *os.File) {
 			time.Sleep(delay)
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"node": map[string]any{}}, nil)
 		case "custom/graph/query":
+			if registerToolsFakeLSPParamsForceError(msg) {
+				sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, nil, &lsp.ResponseError{
+					Code:    -32603,
+					Message: "forced NFR LSP error",
+				})
+				break
+			}
 			time.Sleep(delay)
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"nodes": []any{}}, nil)
 		case "custom/callGraph":
@@ -530,6 +544,18 @@ func runRegisterToolsRequestContextFakeLSP(stdin *os.File, stdout *os.File) {
 			}
 		}
 	}
+}
+
+func registerToolsFakeLSPParamsForceError(msg *lsp.Message) bool {
+	if msg == nil || len(msg.Params) == 0 {
+		return false
+	}
+	var params map[string]any
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return false
+	}
+	uri, _ := params["uri"].(string)
+	return strings.Contains(uri, "nfr-force-lsp-error")
 }
 
 func sendRegisterToolsRequestContextFakeLSPResponse(w *os.File, id *lsp.MessageID, result any, rpcErr *lsp.ResponseError) {

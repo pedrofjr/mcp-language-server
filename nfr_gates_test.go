@@ -216,9 +216,10 @@ func TestNFRGates_CriticalToolsOperationalErrorCoverageAtLeast95Percent(t *testi
 	svc := newRegisteredTestMCPServer(t)
 	initializeTestMCPServer(t, svc)
 
-	scenarios := criticalToolOperationalErrorScenarios()
+	fixturePath := nfrErrorFixturePath(t, svc)
+	scenarios := inventoryOperationalErrorScenarios(fixturePath)
 	if len(scenarios) == 0 {
-		t.Fatal("expected at least one operational error scenario")
+		t.Fatal("expected at least one operational error scenario from inventory")
 	}
 
 	compliant := 0
@@ -226,27 +227,74 @@ func TestNFRGates_CriticalToolsOperationalErrorCoverageAtLeast95Percent(t *testi
 
 	for _, scenario := range scenarios {
 		requestID++
+		svcForScenario := svc
+		if scenario.RequiresFakeLSP {
+			svcForScenario = newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 0)
+			initializeTestMCPServer(t, svcForScenario)
+		}
+
 		resp := handleTestMCPRequest(
 			t,
-			svc,
+			svcForScenario,
 			mcp.MethodToolsCall,
 			map[string]any{
-				"name":      scenario.tool,
-				"arguments": scenario.args,
+				"name":      scenario.Tool,
+				"arguments": scenario.Args,
 			},
 			requestID,
 		)
 
 		payload, isError := toolCallResultPayload(t, resp)
 		if !isError {
-			t.Fatalf("%s: expected error payload for operational audit, got %s", scenario.tool, payload)
+			t.Fatalf("%s (%s): expected error payload for operational audit, got %s", scenario.Tool, scenario.Kind, payload)
 		}
 		if isOperationalMCPErrorPayload(payload) {
 			compliant++
 		} else {
-			t.Logf("%s: non-compliant error payload: %s", scenario.tool, payload)
+			t.Logf("%s (%s): non-compliant error payload: %s", scenario.Tool, scenario.Kind, payload)
 		}
 	}
+
+	// memory_write duplicate title is operational but needs prior state.
+	dupTitle := "NFR-DUP-TITLE-" + t.Name()
+	requestID++
+	dupResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name":      "memory_write",
+			"arguments": map[string]any{"title": dupTitle, "content": "first"},
+		},
+		requestID,
+	)
+	dupPayload, dupIsError := toolCallResultPayload(t, dupResp)
+	if dupIsError {
+		t.Fatalf("memory_write seed for duplicate-title scenario failed: %s", dupPayload)
+	}
+	requestID++
+	dupFailResp := handleTestMCPRequest(
+		t,
+		svc,
+		mcp.MethodToolsCall,
+		map[string]any{
+			"name":      "memory_write",
+			"arguments": map[string]any{"title": dupTitle, "content": "second"},
+		},
+		requestID,
+	)
+	dupFailPayload, dupFailIsError := toolCallResultPayload(t, dupFailResp)
+	if !dupFailIsError {
+		t.Fatalf("memory_write duplicate-title scenario expected error, got %s", dupFailPayload)
+	}
+	if isOperationalMCPErrorPayload(dupFailPayload) {
+		compliant++
+	} else {
+		t.Logf("memory_write duplicate-title: non-compliant error payload: %s", dupFailPayload)
+	}
+	scenarios = append(scenarios, ToolNFRErrorScenario{
+		Tool: "memory_write", Kind: NFRErrorScenarioOperational, Reason: "duplicate title domain failure",
+	})
 
 	ratio := float64(compliant) / float64(len(scenarios))
 	if ratio < NFROperationalErrorCoverageMin {
@@ -260,43 +308,47 @@ func TestNFRGates_CriticalToolsOperationalErrorCoverageAtLeast95Percent(t *testi
 	}
 }
 
+func inventoryOperationalErrorScenarios(fixturePath string) []ToolNFRErrorScenario {
+	scenarios := toolNFRErrorScenarios(fixturePath)
+	filtered := make([]ToolNFRErrorScenario, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		if scenario.Tool == "memory_write" && scenario.Kind == NFRErrorScenarioOperational {
+			continue
+		}
+		filtered = append(filtered, scenario)
+	}
+	return filtered
+}
+
+func nfrErrorFixturePath(t *testing.T, svc *mcpServer) string {
+	t.Helper()
+	return requestContextFixturePath(t, svc)
+}
+
 func criticalToolOperationalErrorScenarios() []struct {
 	tool string
 	args map[string]any
 } {
-	return []struct {
+	fixturePath := "C:/workspace/Unit1.pas"
+	scenarios := toolNFRErrorScenarios(fixturePath)
+	legacy := make([]struct {
 		tool string
 		args map[string]any
-	}{
-		{tool: "edit_file", args: map[string]any{}},
-		{tool: "definition", args: map[string]any{}},
-		{tool: "references", args: map[string]any{}},
-		{tool: "diagnostics", args: map[string]any{"filePath": 1}},
-		{tool: "hover", args: map[string]any{"filePath": "Unit1.pas", "line": "x", "column": 1}},
-		{tool: "rename_symbol", args: map[string]any{}},
-		{tool: "run_query", args: map[string]any{}},
-		{tool: "semantic_search", args: map[string]any{"query": 123}},
-		{tool: "code_actions", args: map[string]any{"filePath": 1, "line": 1, "column": 1}},
-		{tool: "dependency_tree", args: map[string]any{"uri": "file:///u.pas", "direction": "sideways"}},
-		{tool: "memory_write", args: map[string]any{"title": "", "content": ""}},
-		{tool: "memory_read", args: map[string]any{}},
-		{tool: "memory_list", args: map[string]any{"tag": 123}},
-		{tool: "onboarding", args: map[string]any{"projectPath": ""}},
-		{tool: "check_onboarding_performed", args: map[string]any{"projectPath": ""}},
-		{tool: "get_node_at_position", args: map[string]any{"filePath": 1, "line": 1, "column": 1}},
-		{tool: "workspace_symbols", args: map[string]any{"query": 123}},
-		{tool: "graph_query", args: map[string]any{"query": ""}},
-		{tool: "replace_symbol_body", args: map[string]any{}},
-		{tool: "safe_delete_symbol", args: map[string]any{}},
-		{tool: "definition", args: map[string]any{"symbolName": "TargetSymbol"}},
-		{tool: "references", args: map[string]any{"symbolName": "TargetSymbol"}},
-		{tool: "hover", args: map[string]any{"filePath": "Unit1.pas", "line": 1.0, "column": 1.0}},
-		{tool: "diagnostics", args: map[string]any{"filePath": "Unit1.pas"}},
+	}, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		legacy = append(legacy, struct {
+			tool string
+			args map[string]any
+		}{tool: scenario.Tool, args: scenario.Args})
 	}
+	return legacy
 }
 
 func isOperationalMCPErrorPayload(payload string) bool {
-	return strings.Contains(payload, "OP_") && strings.Contains(strings.ToLower(payload), "action:")
+	lower := strings.ToLower(payload)
+	return strings.Contains(payload, "OP_") &&
+		strings.Contains(lower, "action:") &&
+		strings.Contains(lower, "recovery:")
 }
 
 func toolCallResultPayload(t *testing.T, response mcp.JSONRPCResponse) (string, bool) {
