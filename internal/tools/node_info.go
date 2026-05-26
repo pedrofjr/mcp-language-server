@@ -67,8 +67,10 @@ func isIdentChar(b byte) bool {
 
 // GetNodeAtPosition retorna contexto do no na posicao dada.
 func GetNodeAtPosition(ctx context.Context, client *lsp.Client, filePath string, line, col int) (string, error) {
-	_ = ctx
 	_ = client
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	content, err := readSymbolFileContent(filePath)
 	if err != nil {
@@ -102,7 +104,9 @@ var delphiNodeTypes = []string{
 
 // GetNodeTypes retorna a lista de tipos de nos do Delphi suportados.
 func GetNodeTypes(ctx context.Context, client *lsp.Client) (string, error) {
-	_ = ctx
 	_ = client
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return strings.Join(delphiNodeTypes, "\n"), nil
 }

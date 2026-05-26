@@ -95,6 +95,10 @@ func findSymbolEndLine(src, symbolName string) int {
 
 // ReplaceSymbolBody lê o arquivo, localiza o corpo do símbolo e substitui pelo newBody.
 func ReplaceSymbolBody(ctx context.Context, client *lsp.Client, filePath, symbolName, newBody string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
 		return "", fmt.Errorf("invalid file path: %v", err)
@@ -156,6 +160,10 @@ func applySymbolEditWithRollback(
 
 // InsertAfterSymbol insere texto logo após a linha "end;" do símbolo.
 func InsertAfterSymbol(ctx context.Context, client *lsp.Client, filePath, symbolName, text string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
 		return "", fmt.Errorf("invalid file path: %v", err)
@@ -197,6 +205,10 @@ func InsertAfterSymbol(ctx context.Context, client *lsp.Client, filePath, symbol
 
 // InsertBeforeSymbol insere texto logo antes da linha de declaração do símbolo.
 func InsertBeforeSymbol(ctx context.Context, client *lsp.Client, filePath, symbolName, text string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
 		return "", fmt.Errorf("invalid file path: %v", err)

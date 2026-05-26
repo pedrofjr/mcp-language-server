@@ -195,51 +195,15 @@ func TestRegisterTools_References_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
 	assertToolCallResultContainsDeadlineExceededToolError(t, callResp, "references")
 }
 
-func TestRegisterTools_RemainingLSPBackedTools_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
+func TestRegisterTools_AllLSPBackedTools_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
 	svc := newRegisteredTestMCPServerWithContextFakeLSP(t)
 	initializeTestMCPServer(t, svc)
 
 	fixturePath := requestContextFixturePath(t, svc)
+	cases := lspBackedToolRequestContextCases(fixturePath)
 
 	requestCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	cases := []struct {
-		name string
-		args map[string]any
-		id   int
-	}{
-		{
-			name: "diagnostics",
-			args: map[string]any{"filePath": fixturePath},
-			id:   640,
-		},
-		{
-			name: "hover",
-			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
-			id:   641,
-		},
-		{
-			name: "semantic_search",
-			args: map[string]any{"query": "TargetSymbol"},
-			id:   642,
-		},
-		{
-			name: "code_actions",
-			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
-			id:   643,
-		},
-		{
-			name: "get_symbols_overview",
-			args: map[string]any{"query": "TargetSymbol"},
-			id:   644,
-		},
-		{
-			name: "safe_delete_symbol",
-			args: map[string]any{"filePath": fixturePath, "symbolName": "ZZZ_DEL_Only", "force": false},
-			id:   645,
-		},
-	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,55 +229,22 @@ func TestRegisterTools_RemainingLSPBackedTools_ContextCanceledBeforeExecution_Re
 	}
 }
 
-func TestRegisterTools_RemainingLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
+func TestRegisterTools_AllLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
 	originalTimeout := criticalLSPHandlerTimeout
 	criticalLSPHandlerTimeout = 100 * time.Millisecond
+	originalDefinitionTimeout := definitionReferencesHandlerTimeout
+	definitionReferencesHandlerTimeout = 100 * time.Millisecond
 	t.Cleanup(func() {
 		criticalLSPHandlerTimeout = originalTimeout
+		definitionReferencesHandlerTimeout = originalDefinitionTimeout
 	})
 
 	svc := newRegisteredTestMCPServerWithContextFakeLSPDelay(t, 750*time.Millisecond)
 	initializeTestMCPServer(t, svc)
 
 	fixturePath := requestContextFixturePath(t, svc)
+	cases := lspBackedToolSlowLSPTimeoutCases(fixturePath)
 	requestCtx := context.Background()
-
-	cases := []struct {
-		name string
-		args map[string]any
-		id   int
-	}{
-		{
-			name: "diagnostics",
-			args: map[string]any{"filePath": fixturePath},
-			id:   650,
-		},
-		{
-			name: "hover",
-			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
-			id:   651,
-		},
-		{
-			name: "semantic_search",
-			args: map[string]any{"query": "TargetSymbol"},
-			id:   652,
-		},
-		{
-			name: "code_actions",
-			args: map[string]any{"filePath": fixturePath, "line": 2, "column": 11},
-			id:   653,
-		},
-		{
-			name: "get_symbols_overview",
-			args: map[string]any{"query": "TargetSymbol"},
-			id:   654,
-		},
-		{
-			name: "safe_delete_symbol",
-			args: map[string]any{"filePath": fixturePath, "symbolName": "ZZZ_DEL_Only", "force": false},
-			id:   655,
-		},
-	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -327,7 +258,7 @@ func TestRegisterTools_RemainingLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *
 					"name":      tc.name,
 					"arguments": tc.args,
 				},
-				tc.id,
+				tc.id+100,
 			)
 			elapsed := time.Since(start)
 
@@ -337,6 +268,14 @@ func TestRegisterTools_RemainingLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *
 			}
 		})
 	}
+}
+
+func TestRegisterTools_RemainingLSPBackedTools_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t *testing.T) {
+	TestRegisterTools_AllLSPBackedTools_ContextCanceledBeforeExecution_ReturnsDeterministicCanceledError(t)
+}
+
+func TestRegisterTools_RemainingLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t *testing.T) {
+	TestRegisterTools_AllLSPBackedTools_ExplicitTimeout_WhenLSPIsSlow(t)
 }
 
 func requestContextFixturePath(t *testing.T, svc *mcpServer) string {
@@ -394,7 +333,7 @@ func newRegisteredTestMCPServerWithContextFakeLSPDelay(t *testing.T, fakeDelay t
 
 	workspaceDir := t.TempDir()
 	fixturePath := filepath.Join(workspaceDir, "Unit1.pas")
-	fixtureContent := "unit Unit1;\ninterface\nprocedure TargetSymbol;\nimplementation\nprocedure TargetSymbolImpl; begin end;\nprocedure ZZZ_DEL_Only; begin end;\nend.\n"
+	fixtureContent := "unit Unit1;\ninterface\ntype\n  IFoo = interface\n    procedure DoFoo;\n  end;\nprocedure TargetSymbol;\nimplementation\nprocedure TargetSymbolImpl; begin end;\nprocedure ZZZ_DEL_Only; begin end;\nend.\n"
 	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0o644); err != nil {
 		t.Fatalf("failed to create Delphi fixture for request-context tests: %v", err)
 	}
@@ -551,12 +490,42 @@ func runRegisterToolsRequestContextFakeLSP(stdin *os.File, stdout *os.File) {
 			time.Sleep(delay)
 			refs := []map[string]any{location}
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, refs, nil)
+		case "textDocument/rename":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{}, nil)
+		case "textDocument/implementation":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, []map[string]any{}, nil)
+		case "textDocument/didChange":
+			if msg.ID != nil && msg.ID.Value != nil {
+				time.Sleep(delay)
+				sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{}, nil)
+			}
+		case "custom/astSummary":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"unit": "Unit1"}, nil)
+		case "custom/dependencyTree":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"tree": map[string]any{}}, nil)
+		case "custom/graph/neighbors":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"neighbors": []any{}}, nil)
+		case "custom/graph/node":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"node": map[string]any{}}, nil)
+		case "custom/graph/query":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"nodes": []any{}}, nil)
+		case "custom/callGraph":
+			time.Sleep(delay)
+			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{"calls": []any{}}, nil)
 		case "shutdown":
 			sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{}, nil)
 		case "exit":
 			return
 		default:
 			if msg.ID != nil && msg.ID.Value != nil {
+				time.Sleep(delay)
 				sendRegisterToolsRequestContextFakeLSPResponse(writer, msg.ID, map[string]any{}, nil)
 			}
 		}

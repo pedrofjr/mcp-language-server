@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,11 +99,22 @@ func findImplementationsTextScan(src, interfaceName string) []string {
 // FindImplementations procura implementacoes de uma interface no workspace.
 // workspaceDir e o diretorio raiz do workspace; se vazio, usa o diretorio do arquivo.
 func FindImplementations(ctx context.Context, client *lsp.Client, filePath, symbolName, workspaceDir string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	if client != nil {
 		lspResult, err := findImplementationsViaLSP(ctx, client, filePath, symbolName)
 		if err == nil && strings.TrimSpace(lspResult) != "" {
 			return lspResult, nil
 		}
+		if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			return "", err
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	searchDir := workspaceDir

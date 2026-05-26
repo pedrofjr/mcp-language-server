@@ -20,6 +20,10 @@ type TextEdit struct {
 }
 
 func ApplyTextEdits(ctx context.Context, client *lsp.Client, filePath string, edits []TextEdit) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	normalizedPath, err := normalizeFilePathOrURI(filePath)
 	if err != nil {
 		return "", fmt.Errorf("invalid file path or URI: %v", err)

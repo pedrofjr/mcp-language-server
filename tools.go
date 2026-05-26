@@ -534,7 +534,6 @@ func runQueryContextCheckpoint(ctx context.Context) error {
 
 var runQueryCheckpointHook func()
 
-
 func runQueryTextScan(ctx context.Context, query string, nodeType string, filePath string, strictFilePath bool, limit int) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -931,10 +930,13 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing edit_file for file: %s", filePath)
-		response, err := tools.ApplyTextEdits(s.ctx, s.lspClient, filePath, edits)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		response, err := tools.ApplyTextEdits(opCtx, s.lspClient, filePath, edits)
 		if err != nil {
 			coreLogger.Error("Failed to apply edits: %v", err)
-			return OpToolFailedError("edit_file", err.Error(), "verify filePath and edit ranges, then retry")
+			return handleLSPBackedToolError("edit_file", opCtx, err, "verify filePath and edit ranges, then retry")
 		}
 		return mcp.NewToolResultText(response), nil
 	})))
@@ -1221,10 +1223,13 @@ func (s *mcpServer) registerTools() error {
 		}
 
 		coreLogger.Debug("Executing rename_symbol for file: %s line: %d column: %d newName: %s", filePath, line, column, newName)
-		text, err := tools.RenameSymbol(s.ctx, s.lspClient, filePath, line, column, newName)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		text, err := tools.RenameSymbol(opCtx, s.lspClient, filePath, line, column, newName)
 		if err != nil {
 			coreLogger.Error("Failed to rename symbol: %v", err)
-			return OpToolFailedError("rename_symbol", err.Error(), "verify position, newName and LSP availability, then retry")
+			return handleLSPBackedToolError("rename_symbol", opCtx, err, "verify position, newName and LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(text), nil
 	})))
@@ -1237,20 +1242,26 @@ func (s *mcpServer) registerTools() error {
 				mcp.Description("Substring to filter symbols (case-insensitive). Leave empty to list all exported symbols."),
 			),
 		),
-		withToolLogging("workspace_symbols", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			queryRaw := req.Params.Arguments["query"]
-			if queryRaw != nil {
+		withToolLogging("workspace_symbols", withPreToolValidation(func(req mcp.CallToolRequest) (*mcp.CallToolResult, bool) {
+			if queryRaw := req.Params.Arguments["query"]; queryRaw != nil {
 				if _, ok := queryRaw.(string); !ok {
-					return OpValidationError("query must be a string")
+					result, _ := OpValidationError("query must be a string")
+					return result, true
 				}
 			}
-			query, _ := queryRaw.(string)
-			result, err := tools.GetWorkspaceSymbols(s.ctx, s.lspClient, query)
+			return nil, false
+		}, withLSPGuard(s.lspClient, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query, _ := req.Params.Arguments["query"].(string)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetWorkspaceSymbols(opCtx, s.lspClient, query)
 			if err != nil {
-				return OpToolFailedError("workspace_symbols", err.Error(), "check LSP availability and query value, then retry")
+				return handleLSPBackedToolError("workspace_symbols", opCtx, err, "check LSP availability and query value, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
-		}),
+		}))),
 	)
 
 	// get_symbols_overview
@@ -1297,9 +1308,13 @@ func (s *mcpServer) registerTools() error {
 			if !ok || uri == "" {
 				return OpValidationError("uri must be a non-empty string")
 			}
-			result, err := tools.GetAstSummary(s.ctx, s.lspClient, uri)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetAstSummary(opCtx, s.lspClient, uri)
 			if err != nil {
-				return OpToolFailedError("ast_summary", err.Error(), "verify uri points to a Delphi source file and retry")
+				return handleLSPBackedToolError("ast_summary", opCtx, err, "verify uri points to a Delphi source file and retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		})),
@@ -1333,9 +1348,13 @@ func (s *mcpServer) registerTools() error {
 			if direction != "" && direction != "imports" && direction != "importedBy" {
 				return OpValidationError("direction must be 'imports' or 'importedBy'")
 			}
-			result, err := tools.GetDependencyTree(s.ctx, s.lspClient, uri, direction)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetDependencyTree(opCtx, s.lspClient, uri, direction)
 			if err != nil {
-				return OpToolFailedError("dependency_tree", err.Error(), "verify uri and LSP graph index, then retry")
+				return handleLSPBackedToolError("dependency_tree", opCtx, err, "verify uri and LSP graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		}),
@@ -1386,9 +1405,12 @@ func (s *mcpServer) registerTools() error {
 				return OpValidationError("direction must be 'imports' or 'importedBy'")
 			}
 
-			result, err := tools.GetGraphNeighbors(s.ctx, s.lspClient, uri, relationType, direction)
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetGraphNeighbors(opCtx, s.lspClient, uri, relationType, direction)
 			if err != nil {
-				return OpToolFailedError("graph_neighbors", err.Error(), "verify uri, relationType and direction, then retry")
+				return handleLSPBackedToolError("graph_neighbors", opCtx, err, "verify uri, relationType and direction, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		}),
@@ -1424,9 +1446,12 @@ func (s *mcpServer) registerTools() error {
 				return OpValidationError("relationType must be 'uses_unit'")
 			}
 
-			result, err := tools.GetGraphNode(s.ctx, s.lspClient, uri, relationType)
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetGraphNode(opCtx, s.lspClient, uri, relationType)
 			if err != nil {
-				return OpToolFailedError("graph_node", err.Error(), "verify uri and relationType, then retry")
+				return handleLSPBackedToolError("graph_node", opCtx, err, "verify uri and relationType, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		}),
@@ -1502,9 +1527,12 @@ func (s *mcpServer) registerTools() error {
 				depth = int(depthNumber)
 			}
 
-			result, err := tools.GetGraphQuery(s.ctx, s.lspClient, uri, relationType, direction, depth)
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetGraphQuery(opCtx, s.lspClient, uri, relationType, direction, depth)
 			if err != nil {
-				return OpToolFailedError("graph_query", err.Error(), "verify uri, direction, depth and LSP graph index, then retry")
+				return handleLSPBackedToolError("graph_query", opCtx, err, "verify uri, direction, depth and LSP graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		}),
@@ -1555,9 +1583,12 @@ func (s *mcpServer) registerTools() error {
 				depth = int(depthNumber)
 			}
 
-			result, err := tools.GetCallGraph(s.ctx, s.lspClient, symbolName, depth)
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.GetCallGraph(opCtx, s.lspClient, symbolName, depth)
 			if err != nil {
-				return OpToolFailedError("call_graph", err.Error(), "verify symbolName and LSP call graph index, then retry")
+				return handleLSPBackedToolError("call_graph", opCtx, err, "verify symbolName and LSP call graph index, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		}),
@@ -1811,9 +1842,13 @@ func (s *mcpServer) registerTools() error {
 			if !ok {
 				return OpValidationError("newBody must be a string")
 			}
-			result, err := tools.ReplaceSymbolBody(s.ctx, s.lspClient, filePath, symbolName, newBody)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.ReplaceSymbolBody(opCtx, s.lspClient, filePath, symbolName, newBody)
 			if err != nil {
-				return OpToolFailedError("replace_symbol_body", err.Error(), "verify symbol exists and newBody is valid, then retry")
+				return handleLSPBackedToolError("replace_symbol_body", opCtx, err, "verify symbol exists and newBody is valid, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		})),
@@ -1840,9 +1875,13 @@ func (s *mcpServer) registerTools() error {
 			if !ok {
 				return OpValidationError("text must be a string")
 			}
-			result, err := tools.InsertAfterSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.InsertAfterSymbol(opCtx, s.lspClient, filePath, symbolName, text)
 			if err != nil {
-				return OpToolFailedError("insert_after_symbol", err.Error(), "verify symbol exists and text payload, then retry")
+				return handleLSPBackedToolError("insert_after_symbol", opCtx, err, "verify symbol exists and text payload, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		})),
@@ -1869,9 +1908,13 @@ func (s *mcpServer) registerTools() error {
 			if !ok {
 				return OpValidationError("text must be a string")
 			}
-			result, err := tools.InsertBeforeSymbol(s.ctx, s.lspClient, filePath, symbolName, text)
+
+			opCtx, cancel := handlerOperationContext(ctx)
+			defer cancel()
+
+			result, err := tools.InsertBeforeSymbol(opCtx, s.lspClient, filePath, symbolName, text)
 			if err != nil {
-				return OpToolFailedError("insert_before_symbol", err.Error(), "verify symbol exists and text payload, then retry")
+				return handleLSPBackedToolError("insert_before_symbol", opCtx, err, "verify symbol exists and text payload, then retry")
 			}
 			return mcp.NewToolResultText(result), nil
 		})),
@@ -2325,8 +2368,14 @@ func (s *mcpServer) registerTools() error {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 
-		result, err := tools.GetDiagnosticsForSymbol(s.ctx, s.lspClient, filePath, symbolName)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		result, err := tools.GetDiagnosticsForSymbol(opCtx, s.lspClient, filePath, symbolName)
 		if err != nil {
+			if deterministic := deterministicHandlerContextError("get_diagnostics_for_symbol", opCtx, err); deterministic != nil {
+				return deterministic, nil
+			}
 			return OpErrorFromDomain("get_diagnostics_for_symbol", err, "verify filePath and symbolName, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
@@ -2340,8 +2389,14 @@ func (s *mcpServer) registerTools() error {
 		filePath, _ := request.Params.Arguments["filePath"].(string)
 		symbolName, _ := request.Params.Arguments["symbolName"].(string)
 
-		result, err := tools.FindImplementations(s.ctx, s.lspClient, filePath, symbolName, s.config.workspaceDir)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		result, err := tools.FindImplementations(opCtx, s.lspClient, filePath, symbolName, s.config.workspaceDir)
 		if err != nil {
+			if deterministic := deterministicHandlerContextError("find_implementations", opCtx, err); deterministic != nil {
+				return deterministic, nil
+			}
 			return OpErrorFromDomain("find_implementations", err, "verify interface symbol and workspace, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
@@ -2367,8 +2422,14 @@ func (s *mcpServer) registerTools() error {
 		line, _ := parsePositiveIntegerArgument(request.Params.Arguments["line"], "line")
 		column, _ := parsePositiveIntegerArgument(request.Params.Arguments["column"], "column")
 
-		result, err := tools.GetNodeAtPosition(s.ctx, s.lspClient, filePath, line, column)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		result, err := tools.GetNodeAtPosition(opCtx, s.lspClient, filePath, line, column)
 		if err != nil {
+			if deterministic := deterministicHandlerContextError("get_node_at_position", opCtx, err); deterministic != nil {
+				return deterministic, nil
+			}
 			return OpErrorFromDomain("get_node_at_position", err, "verify filePath and line/column, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
@@ -2377,8 +2438,14 @@ func (s *mcpServer) registerTools() error {
 	s.mcpServer.AddTool(mcp.NewTool("get_node_types",
 		mcp.WithDescription("Retorna a lista de tipos de no suportados pelo Delphi 6"),
 	), withToolLogging("get_node_types", withLSPGuard(s.lspClient, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := tools.GetNodeTypes(s.ctx, s.lspClient)
+		opCtx, cancel := handlerOperationContext(ctx)
+		defer cancel()
+
+		result, err := tools.GetNodeTypes(opCtx, s.lspClient)
 		if err != nil {
+			if deterministic := deterministicHandlerContextError("get_node_types", opCtx, err); deterministic != nil {
+				return deterministic, nil
+			}
 			return OpErrorFromDomain("get_node_types", err, "verify LSP availability, then retry")
 		}
 		return mcp.NewToolResultText(result), nil
