@@ -16,7 +16,14 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 ## Setup
 
 1. **Install Go**: Follow instructions at <https://golang.org/doc/install>
-2. **Install or update this server**: `go install github.com/isaacphi/mcp-language-server@latest`
+2. **Install or update this server** (pick a supported path):
+
+   | Need | Supported install |
+   |------|-------------------|
+   | **Delphi / `run_query` tree-sitter** (recommended) | Clone this repo, then from the repo root: `go install .` or `just install`. The parser is vendored in `third_party/tree-sitter-delphi6/` — no sibling `Delphi_Oracle` checkout. |
+   | **Generic MCP without Delphi structural tools** | `go install github.com/isaacphi/mcp-language-server@latest` (tags before `v0.1.2` do not bundle the Delphi parser). |
+   | **Remote install with Delphi parser** | After tag `v0.1.2` or newer is published: `go install github.com/isaacphi/mcp-language-server@v0.1.2` (or newer). CI validates `go install .` from a module-only checkout. |
+
 3. **Install a language server**: _follow one of the guides below_
 4. **Configure your MCP client**: _follow one of the guides below_
 
