@@ -35,6 +35,36 @@ func TestReleaseInstall_VendoredParserPresent(t *testing.T) {
 
 // TestReleaseInstall_GoInstallFromModuleRoot is the supported release path documented in README:
 // clone (or CI checkout) + go install . with no monorepo sibling.
+// readmeInstallRequiredPhrases are the public install/CLI contract documented in README.md
+// and enforced by CI (TestReleaseInstall_*).
+var readmeInstallRequiredPhrases = []string{
+	"go install .",
+	"third_party/tree-sitter-delphi6/",
+	"go install github.com/isaacphi/mcp-language-server@latest",
+	"v0.1.2",
+	"--help",
+	"Exit code",
+}
+
+// TestReleaseInstall_ReadmeDocumentsSupportedPaths ensures README matches the supported
+// release path validated by TestReleaseInstall_GoInstallFromModuleRoot.
+func TestReleaseInstall_ReadmeDocumentsSupportedPaths(t *testing.T) {
+	root := moduleRoot(t)
+	readmeBytes, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	readme := string(readmeBytes)
+	for _, phrase := range readmeInstallRequiredPhrases {
+		if !strings.Contains(readme, phrase) {
+			t.Fatalf("README.md must document supported install/CLI phrase %q", phrase)
+		}
+	}
+	if strings.Contains(readme, "replace github.com/tree-sitter/tree-sitter-delphi6 => ../Delphi_Oracle") {
+		t.Fatal("README must not instruct sibling Delphi_Oracle checkout as the primary install path")
+	}
+}
+
 func TestReleaseInstall_GoInstallFromModuleRoot(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess go install in -short mode")

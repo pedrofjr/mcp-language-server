@@ -24,6 +24,8 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
    | **Generic MCP without Delphi structural tools** | `go install github.com/isaacphi/mcp-language-server@latest` (tags before `v0.1.2` do not bundle the Delphi parser). |
    | **Remote install with Delphi parser** | After tag `v0.1.2` or newer is published: `go install github.com/isaacphi/mcp-language-server@v0.1.2` (or newer). CI validates `go install .` from a module-only checkout. |
 
+   **CLI reference:** run `mcp-language-server --help` for flags (`--workspace`, `--lsp`, `--search-path`, `--delphi-installation-path`, …). Exit code **0** on clean shutdown; **1** on startup or fatal server error. MCP tool responses use operational `OP_*` codes with `action:` and `recovery:` hints (see `tools_nfr_inventory.go` and `TestNFRGates_*` in this repo).
+
 3. **Install a language server**: _follow one of the guides below_
 4. **Configure your MCP client**: _follow one of the guides below_
 
