@@ -4,6 +4,8 @@ mcp-language-server.exe
 
 # Test output
 test-output/
+# Local duplicate of third_party/nfr-delphi-corpus (committed under third_party/)
+testdata/
 *.diff
 integrationtests/workspaces/clangd/compile_commands.json
 integrationtests/workspaces/clangd/src/*.o
