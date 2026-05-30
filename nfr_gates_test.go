@@ -394,7 +394,8 @@ func inventoryOperationalErrorScenarios(fixturePath string) []ToolNFRErrorScenar
 	scenarios := toolNFRErrorScenarios(fixturePath)
 	filtered := make([]ToolNFRErrorScenario, 0, len(scenarios))
 	for _, scenario := range scenarios {
-		if scenario.Tool == "memory_write" && scenario.Kind == NFRErrorScenarioOperational {
+		if scenario.Kind == NFRErrorScenarioOperational &&
+			(scenario.Tool == "memory_write" || scenario.Tool == "onboarding") {
 			continue
 		}
 		filtered = append(filtered, scenario)

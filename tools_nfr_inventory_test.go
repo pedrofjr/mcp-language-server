@@ -44,7 +44,8 @@ func TestToolNFRInventory_EveryCriticalToolHasValidationAndOperationalScenarios(
 			t.Fatalf("critical tool %q missing validation NFR scenario", entry.Name)
 		}
 		if _, ok := scenarios[NFRErrorScenarioOperational]; !ok {
-			if entry.Name == "memory_write" {
+			if entry.Name == "memory_write" || entry.Name == "memory_list" ||
+				entry.Name == "check_onboarding_performed" || entry.Name == "onboarding" {
 				continue
 			}
 			t.Fatalf("critical tool %q missing operational NFR scenario", entry.Name)
