@@ -47,11 +47,15 @@ var criticalMCPTools = map[string]struct{}{
 	"memory_list":                {},
 	"onboarding":                 {},
 	"check_onboarding_performed": {},
+	"get_symbols_overview":       {},
 	"get_node_at_position":       {},
 	"workspace_symbols":          {},
 	"graph_query":                {},
 	"replace_symbol_body":        {},
+	"insert_after_symbol":        {},
+	"insert_before_symbol":       {},
 	"safe_delete_symbol":         {},
+	"get_diagnostics_for_symbol": {},
 }
 
 func contextWithToolObs(ctx context.Context, workspaceDir string) context.Context {

@@ -23,6 +23,17 @@ func TestRegisteredToolInventory_CoversAllLSPBackedRequestContextCases(t *testin
 	}
 }
 
+func TestRegisteredToolInventory_CriticalFlagImpliesCriticalMCPTools(t *testing.T) {
+	for _, entry := range registeredToolInventory() {
+		if !entry.Critical {
+			continue
+		}
+		if _, ok := criticalMCPTools[entry.Name]; !ok {
+			t.Fatalf("inventory Critical=true for %q but missing from criticalMCPTools", entry.Name)
+		}
+	}
+}
+
 func TestCriticalMCPTools_AreRegisteredInventoryEntries(t *testing.T) {
 	byName := make(map[string]ToolInventoryEntry)
 	for _, entry := range registeredToolInventory() {
