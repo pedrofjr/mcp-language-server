@@ -38,7 +38,9 @@ Write-Host "=== backlog user stories ==="
 & $checkBacklog
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Orçamento de linhas: docs/file-size-exceptions.txt no monorepo Delphi_Oracle (gate transversal).
+Write-Host "=== file line budget (MCP root, documented exceptions) ==="
+& $reportLines -Root $mcpRoot -ExceptionsFile $exceptions
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "MCP validate-style OK"
 exit 0
