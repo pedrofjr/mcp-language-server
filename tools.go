@@ -2276,7 +2276,7 @@ func (s *mcpServer) registerTools() error {
 	// Sprint 3: run_query
 	s.mcpServer.AddTool(
 		mcp.NewTool("run_query",
-			mcp.WithDescription("run_query v2: Delphi workspace scan (.pas/.pp/.dpr/.dpk/.lpr/.inc, same matrix as references) via tree-sitter Delphi 6. Requires query and/or node_type. With node_type (or query-only matching a valid node type name), runs tree-sitter query `(node_type) @match` and returns JSON matches with nodeType, optional captureName (explicit captures only), and symbolName (routine/unit/package declarations). Without node_type, free-text query filters named AST nodes by substring (textual fallback). Invalid node_type returns a tree-sitter query error. Legacy fields file/line/text preserved."),
+			mcp.WithDescription("run_query v2 (fallback estrutural degradado): scan local via tree-sitter Delphi 6 em .pas/.pp/.dpr/.dpk/.lpr/.inc quando o Oracle LSP nao estiver disponivel. Nao substitui analise semantica Delphi (preprocessor, SourceMap, HIR, resolucao) — use tools LSP-backed (definition, references, hover, diagnostics, rename_symbol, get_symbols_overview) para fonte autoritativa. Requer query e/ou node_type; com node_type executa query tree-sitter (captureName/symbolName); sem node_type filtra nos AST por substring. Campos legados file/line/text preservados."),
 			mcp.WithString("query",
 				mcp.Description("Optional text filter on node content, or implicit node_type when it matches a valid tree-sitter node type name (lowercase + underscores)."),
 			),

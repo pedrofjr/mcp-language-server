@@ -27,9 +27,6 @@ func TestNFRGates_CriticalHandlerTimeoutsMax15Seconds(t *testing.T) {
 
 func TestNFRGates_DelphiExtensionMatrixMatchesWorkspaceContract(t *testing.T) {
 	root := filepath.Join("testdata", "nfr-delphi-corpus")
-	if err := ensureNFRCorpusMatrixExtensions(root); err != nil {
-		t.Fatalf("ensure matrix fixtures: %v", err)
-	}
 	stats, err := describeNFRCorpus(root)
 	if err != nil {
 		t.Fatalf("describe corpus: %v", err)
