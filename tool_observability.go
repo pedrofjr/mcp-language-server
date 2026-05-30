@@ -18,6 +18,10 @@ const (
 	toolOutcomeError   = "error"
 )
 
+// criticalMCPTools lists tools whose timeout/cancel paths are exercised in NFR gates.
+// Every name must exist in registeredToolInventory() with Critical=true
+// (see TestCriticalMCPTools_AreRegisteredInventoryEntries).
+
 var toolCallSeq atomic.Uint64
 
 type toolObsContextKey struct{}

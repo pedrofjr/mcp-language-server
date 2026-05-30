@@ -23,6 +23,22 @@ func TestRegisteredToolInventory_CoversAllLSPBackedRequestContextCases(t *testin
 	}
 }
 
+func TestCriticalMCPTools_AreRegisteredInventoryEntries(t *testing.T) {
+	byName := make(map[string]ToolInventoryEntry)
+	for _, entry := range registeredToolInventory() {
+		byName[entry.Name] = entry
+	}
+	for name := range criticalMCPTools {
+		entry, ok := byName[name]
+		if !ok {
+			t.Fatalf("criticalMCPTools %q missing from registeredToolInventory", name)
+		}
+		if !entry.Critical {
+			t.Fatalf("criticalMCPTools %q is not Critical in inventory", name)
+		}
+	}
+}
+
 func TestRegisteredToolInventory_EveryCriticalLSPBackedToolHasRequestContextCase(t *testing.T) {
 	cases := lspBackedToolRequestContextCases("C:/workspace/Unit1.pas")
 	covered := make(map[string]struct{}, len(cases))

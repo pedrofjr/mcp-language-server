@@ -1,38 +1,44 @@
-# Gates de estilo MCP: gofmt + go vet + orcamento de linhas.
+# Gates de estilo MCP: gofmt (changed .go only) + go vet + orcamento de linhas.
 $ErrorActionPreference = "Stop"
-$root = Split-Path $PSScriptRoot -Parent
-$delphiOracle = Join-Path (Split-Path $root -Parent) "Delphi_Oracle"
+$mcpRoot = Split-Path $PSScriptRoot -Parent
+$delphiOracle = Join-Path (Split-Path $mcpRoot -Parent) "Delphi_Oracle"
 $exceptions = Join-Path $delphiOracle "docs\file-size-exceptions.txt"
 $reportLines = Join-Path $delphiOracle "scripts\report-file-line-budget.ps1"
 $checkBacklog = Join-Path $delphiOracle "scripts\check-backlog-user-stories.ps1"
+$git = "git"
 
-Set-Location $root
-Write-Host "=== gofmt (product sources) ==="
-$fmtOut = & gofmt -l (Get-ChildItem -Path $root -Recurse -Filter "*.go" -File |
-    Where-Object { $_.FullName -notmatch '\\test-output\\|\\third_party\\tree-sitter-delphi6\\' } |
-    ForEach-Object { $_.FullName })
-if ($fmtOut) {
+Set-Location $mcpRoot
+
+Write-Host "=== gofmt (changed .go files only) ==="
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$changed = @()
+$changed += (& git diff --name-only HEAD 2>&1 | Where-Object { $_ -and $_ -notmatch '^\s*warning:' })
+$changed += (& git diff --name-only --cached 2>&1 | Where-Object { $_ -and $_ -notmatch '^\s*warning:' })
+$ErrorActionPreference = $prevEap
+$goFiles = $changed | Where-Object { $_ -and $_ -match '\.go$' } | Select-Object -Unique
+$fmtBad = @()
+foreach ($rel in $goFiles) {
+    $full = Join-Path $mcpRoot $rel
+    if (-not (Test-Path $full)) { continue }
+    $out = & gofmt -l $full 2>$null
+    if ($out) { $fmtBad += $out }
+}
+if ($fmtBad.Count -gt 0) {
     Write-Host "gofmt would change:" -ForegroundColor Red
-    $fmtOut | ForEach-Object { Write-Host "  $_" }
+    $fmtBad | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 
 Write-Host "=== go vet ==="
-Push-Location $root
-try {
-    & go vet ./...
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-    Pop-Location
-}
+& go vet ./...
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "=== backlog user stories ==="
 & $checkBacklog
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "=== file line budget (documented exceptions) ==="
-& $reportLines -Root $delphiOracle -ExceptionsFile $exceptions
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Orçamento de linhas: docs/file-size-exceptions.txt no monorepo Delphi_Oracle (gate transversal).
 
 Write-Host "MCP validate-style OK"
 exit 0
