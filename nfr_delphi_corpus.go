@@ -42,7 +42,7 @@ func resolveNFRCorpusRoot() (string, error) {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		if err := ensureNFRCorpusMatrixExtensions(cleaned); err != nil {
+		if err := validateNFRCorpusMatrixExtensions(cleaned); err != nil {
 			continue
 		}
 		stats, err := describeNFRCorpus(cleaned)
@@ -65,7 +65,7 @@ func describeNFRCorpus(root string) (NFRCorpusStats, error) {
 		FilesByExtension: make(map[string]int),
 	}
 
-	if err := ensureNFRCorpusMatrixExtensions(stats.Root); err != nil {
+	if err := validateNFRCorpusMatrixExtensions(stats.Root); err != nil {
 		return NFRCorpusStats{}, err
 	}
 
@@ -126,6 +126,34 @@ func hasRequiredMatrixExtensions(counts map[string]int) bool {
 	return true
 }
 
+// validateNFRCorpusMatrixExtensions fails if versioned corpus lacks required matrix extensions (read-only).
+func validateNFRCorpusMatrixExtensions(root string) error {
+	counts := make(map[string]int)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return nil
+		}
+		if !tools.IsDelphiWorkspaceSourceFile(entry.Name()) {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		counts[ext]++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !hasRequiredMatrixExtensions(counts) {
+		return fmt.Errorf(
+			"corpus at %s missing required matrix extensions (.inc/.pp/.lpr); matrix=%s",
+			root,
+			tools.DelphiWorkspaceExtensionsDoc,
+		)
+	}
+	return nil
+}
+
+// ensureNFRCorpusMatrixExtensions writes matrix fixtures — test-only (t.TempDir); never used in resolveNFRCorpusRoot.
 func ensureNFRCorpusMatrixExtensions(root string) error {
 	fixtures := []struct {
 		name    string

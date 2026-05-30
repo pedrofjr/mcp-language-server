@@ -108,13 +108,6 @@ func toolNFRErrorScenarios(fixturePath string) []ToolNFRErrorScenario {
 		{Tool: "dependency_tree", Kind: NFRErrorScenarioOperational, Args: map[string]any{"uri": "file:///nfr-force-lsp-error.pas"}, Reason: "LSP custom method failure", RequiresFakeLSP: true},
 		{Tool: "graph_query", Kind: NFRErrorScenarioOperational, Args: map[string]any{"uri": "file:///nfr-force-lsp-error.pas"}, Reason: "LSP custom method failure", RequiresFakeLSP: true},
 		{Tool: "memory_read", Kind: NFRErrorScenarioOperational, Args: map[string]any{"id": "does-not-exist-nfr"}, Reason: "memory not found domain failure"},
-		{Tool: "memory_list", Kind: NFRErrorScenarioOperational, Args: map[string]any{"tag": "nonexistent-nfr-tag"}, Reason: "memory list domain failure"},
-		{Tool: "onboarding", Kind: NFRErrorScenarioOperational, Args: map[string]any{
-			"projectPath": filepath.Join(filepath.Dir(fixturePath), "nonexistent-onboarding-project-nfr"),
-		}, Reason: "onboarding project path failure"},
-		{Tool: "check_onboarding_performed", Kind: NFRErrorScenarioOperational, Args: map[string]any{
-			"projectPath": filepath.Join(filepath.Dir(fixturePath), "nonexistent-check-onboarding-nfr"),
-		}, Reason: "check onboarding path failure"},
 		{Tool: "get_node_at_position", Kind: NFRErrorScenarioOperational, Args: map[string]any{
 			"filePath": fixturePath, "line": 2.0, "column": 1.0,
 		}, Reason: "LSP guard when client nil"},

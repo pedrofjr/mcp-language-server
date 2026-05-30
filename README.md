@@ -22,7 +22,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
    |------|-------------------|
    | **Delphi / `run_query` tree-sitter** (recommended) | Clone this repo, then from the repo root: `go install .` or `just install`. The parser is vendored in `third_party/tree-sitter-delphi6/` — no sibling `Delphi_Oracle` checkout. |
    | **Generic MCP without Delphi structural tools** | `go install github.com/isaacphi/mcp-language-server@latest` (tags before `v0.1.2` do not bundle the Delphi parser). |
-   | **Remote install with Delphi parser** | After tag `v0.1.2` or newer is published: `go install github.com/isaacphi/mcp-language-server@v0.1.2` (or newer). CI validates `go install .` from a module-only checkout. |
+   | **Remote install with Delphi parser** | **Not validated in CI until a published tag is exercised.** Use clone + `go install .` for Delphi. Do not document `@tag` install as supported until `release_install_test.go` covers `go install github.com/isaacphi/mcp-language-server@<tag>` in a clean module cache. |
 
    **CLI reference:** run `mcp-language-server --help` for flags (`--workspace`, `--lsp`, `--search-path`, `--delphi-installation-path`, …). Exit code **0** on clean shutdown; **1** on startup or fatal server error. MCP tool responses use operational `OP_*` codes with `action:` and `recovery:` hints (see `tools_nfr_inventory.go` and `TestNFRGates_*` in this repo).
 
@@ -186,6 +186,8 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols. Each symbol now includes `trace` with `preferredSymbolName`, `symbolNameCandidates`, and ready-to-call `definition.symbolName` / `references.symbolName` bridge values.
 - `run_query`: Consulta estrutural tree-sitter Delphi 6 no workspace (`.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`) com `node_type`, fallback textual, `captureName` e `symbolName`.
+- `dependency_tree`: Grafo de dependências de units/símbolos via LSP (requer `--lsp` configurado).
+- `workspace_symbols`, `code_actions`, `memory_read`, `memory_write`, `memory_list`, `onboarding`, `check_onboarding_performed`: ver inventário completo em `tools_inventory.go` / `TestToolInventory_MatchesToolsList`.
 
 ## Fluxo inicial recomendado
 
@@ -344,9 +346,13 @@ git clone https://github.com/isaacphi/mcp-language-server.git
 cd mcp-language-server
 ```
 
-#### Delphi / Oracle LSP (tree-sitter)
+#### Delphi / Oracle LSP
 
-**Modo release (clone só do MCP):** o parser Delphi 6 está em `third_party/tree-sitter-delphi6/`. `go build` e `go test` não dependem de repositório irmão (`../Delphi_Oracle`).
+**Fonte semântica autoritativa:** `definition`, `references`, `hover`, `rename_symbol`, `diagnostics`, `workspace_symbols`, `code_actions` e edição simbólica delegam ao **Oracle LSP** (`--lsp` apontando para `oracle-lsp`). O MCP não substitui preprocessor, HIR, SourceMap ou resolução cross-unit do LSP.
+
+**`run_query` + tree-sitter:** consulta estrutural opcional via parser vendored em `third_party/tree-sitter-delphi6/` (auxiliar, não fonte semântica). Sem LSP, respostas são **degradadas** (texto/AST local), nunca equivalentes ao pipeline completo do LSP.
+
+**Modo release (clone só do MCP):** `go build` / `go test` / `go install .` não exigem checkout de `Delphi_Oracle`; o vendor tree-sitter é embutido para `run_query` apenas.
 
 **Modo monorepo (desenvolvimento Oracle):** após alterar a gramática em `Delphi_Oracle/tree-sitter-delphi6`, sincronize o vendor e commite:
 
