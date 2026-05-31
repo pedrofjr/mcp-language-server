@@ -30,20 +30,11 @@ jobs:
       - name: MCP validate-style (gofmt, vet, line budget)
         shell: pwsh
         run: |
-          if (Test-Path "./docs/file-size-exceptions.txt") {
-            & ./scripts/validate-style.ps1
-          } elseif (Test-Path "../Delphi_Oracle/docs/file-size-exceptions.txt") {
-            & ./scripts/validate-style.ps1
-          } else {
-            Write-Host "SKIP file line budget: ../Delphi_Oracle not checked out; running gofmt+vet subset"
-            $changed = git diff --name-only HEAD 2>$null
-            $goFiles = $changed | Where-Object { $_ -match '\.go$' }
-            foreach ($rel in $goFiles) {
-              if (Test-Path $rel) { gofmt -w $rel }
-            }
-            go vet ./...
-            Write-Host "MCP validate-style partial OK (no monorepo sibling)"
+          if (-not (Test-Path "./docs/file-size-exceptions.txt")) {
+            Write-Error "MCP validate-style FAIL: docs/file-size-exceptions.txt ausente (gate autocontido obrigatorio)"
+            exit 1
           }
+          & ./scripts/validate-style.ps1
       - name: Run Delphi structural tool tests
         run: go test ./internal/tools/... -run "RunQuery|BuildQuery" -count=1
 

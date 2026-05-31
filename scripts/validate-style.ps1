@@ -5,8 +5,8 @@ $exceptions = Join-Path $mcpRoot "docs\file-size-exceptions.txt"
 $reportLines = Join-Path $mcpRoot "scripts\report-file-line-budget.ps1"
 $checkBacklog = Join-Path $mcpRoot "scripts\check-backlog-user-stories.ps1"
 if (-not (Test-Path $exceptions)) {
-    $delphiOracle = Join-Path (Split-Path $mcpRoot -Parent) "Delphi_Oracle"
-    $exceptions = Join-Path $delphiOracle "docs\file-size-exceptions.txt"
+    Write-Host "MCP validate-style FAIL: docs/file-size-exceptions.txt ausente no repo MCP" -ForegroundColor Red
+    exit 1
 }
 $git = "git"
 

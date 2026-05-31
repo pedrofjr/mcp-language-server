@@ -26,6 +26,8 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 
    **CLI reference:** run `mcp-language-server --help` for flags (`--workspace`, `--lsp`, `--search-path`, `--delphi-installation-path`, …). Exit code **0** on clean shutdown; **1** on startup or fatal server error. MCP tool responses use operational `OP_*` codes with `action:` and `recovery:` hints (see `tools_nfr_inventory.go` and `TestNFRGates_*` in this repo).
 
+   **Harness CLI First (agentes):** `scripts/mcp-tools-harness.ps1` — `list` (tools/list JSON) e `call` (tools/call com `--args-json`). Exemplo: `powershell -File scripts/mcp-tools-harness.ps1 list -Workspace .`
+
 3. **Install a language server**: _follow one of the guides below_
 4. **Configure your MCP client**: _follow one of the guides below_
 
