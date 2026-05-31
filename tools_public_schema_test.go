@@ -102,3 +102,25 @@ func TestMcpToolsPublic_ExamplesMatchRequestContextSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMcpToolsPublic_AllInventoryToolsHaveOwnExample(t *testing.T) {
+	catalog, err := os.ReadFile("docs/MCP_TOOLS_PUBLIC.md")
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	text := string(catalog)
+
+	for _, entry := range registeredToolInventory() {
+		row := criticalCatalogRow(text, entry.Name)
+		if row == "" {
+			t.Fatalf("catalog missing row for tool %q", entry.Name)
+		}
+		lower := strings.ToLower(row)
+		if strings.Contains(lower, "ver tools/list") {
+			t.Fatalf("tool %q must include own JSON example, not tools/list deferral", entry.Name)
+		}
+		if extractExampleJSONFromCatalogRow(row) == nil {
+			t.Fatalf("tool %q missing parseable JSON example in catalog row", entry.Name)
+		}
+	}
+}

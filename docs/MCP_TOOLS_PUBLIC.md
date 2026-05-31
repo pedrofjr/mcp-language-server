@@ -33,11 +33,11 @@ Fonte de verdade operacional: `tools/list` + este catálogo. Paridade com `tools
 | get_node_at_position | No AST na posicao | filePath, line, column | `{"filePath":"unit.pas","line":8,"column":4}` | yes | LSP-backed |
 | get_node_types | Tipos de nos tree-sitter | (nenhum) | `{}` | no | local |
 | check_onboarding_performed | Verifica onboarding | projectPath | `{"projectPath":"."}` | yes | local |
-| analyze_complexity | Complexidade ciclomatica | src, symbol_name | ver tools/list | no | local |
-| find_similar_code | Codigo similar | src, pattern | ver tools/list | no | local |
-| activate_project | Ativa diretorio projeto | dir | ver tools/list | no | local |
-| build_query | Monta query tree-sitter | node_type | ver tools/list | no | local |
-| adapt_query | Adapta query por dialeto | base, dialect | ver tools/list | no | local |
+| analyze_complexity | Complexidade ciclomatica | src, symbol_name | `{"src":"procedure TFoo.Bar;\nbegin\n  if x > 0 then DoIt;\nend;","symbol_name":"TFoo.Bar"}` | no | local |
+| find_similar_code | Codigo similar | src, query | `{"src":"procedure A;\nbegin\n  DoWork;\nend;","query":"DoWork"}` | no | local |
+| activate_project | Ativa diretorio projeto | dir | `{"dir":"C:/workspace/MyProject"}` | no | local |
+| build_query | Monta query tree-sitter | node_type | `{"node_type":"class_declaration","symbol":"TSmoke"}` | no | local |
+| adapt_query | Adapta query por dialeto | base, dialect | `{"base":"(class_declaration) @name","dialect":"delphi6"}` | no | local |
 | memory_write | Escreve memoria agente | title, content | `{"title":"note","content":"text"}` | yes | mutating |
 | write_memory | Alias memory_write | title, content | `{"title":"note","content":"text"}` | no | mutating |
 | memory_read | Le memoria | id | `{"id":"note"}` | yes | local |
