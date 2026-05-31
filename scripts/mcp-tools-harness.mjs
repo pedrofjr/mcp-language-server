@@ -3,7 +3,8 @@
  * Harness CLI MCP: tools/list e tools/call via stdio (CLI First).
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -137,6 +138,49 @@ function spawnMcp(workspace, lspCommand, lspArgs) {
   return spawn(mcpCmd, mcpRunArgs, { stdio: ["pipe", "pipe", "pipe"], cwd: MCP_ROOT });
 }
 
+function assertSymbolAbsentOnDisk(filePath, symbolName) {
+  const member = symbolName.includes(".")
+    ? symbolName.split(".").pop()
+    : symbolName;
+  const disk = readFileSync(filePath, "utf8");
+  const qualifiedPattern = new RegExp(
+    `\\b${member.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+    "i",
+  );
+  if (qualifiedPattern.test(disk)) {
+    return {
+      ok: false,
+      error: `simbolo solicitado "${symbolName}" ainda presente no arquivo`,
+    };
+  }
+  return { ok: true };
+}
+
+function testSafeDeleteDiskNegativeFixture() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mcp-safe-del-neg-"));
+  const filePath = path.join(dir, "symbol_mutate.pas");
+  writeFileSync(
+    filePath,
+    ["unit U;", "implementation", "procedure DeleteMe;", "begin", "end.", "end."].join(
+      "\n",
+    ),
+    "utf8",
+  );
+  const check = assertSymbolAbsentOnDisk(filePath, "DeleteMe");
+  rmSync(dir, { recursive: true, force: true });
+  if (check.ok) {
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: "safe-delete-disk-negative: deveria falhar com DeleteMe ainda no disco",
+      }),
+    );
+    return 1;
+  }
+  console.log(JSON.stringify({ ok: true, test: "safe-delete-disk-negative" }, null, 2));
+  return 0;
+}
+
 async function withMcpSession(opts, fn) {
   const lsp = opts.lspCommand
     ? { command: opts.lspCommand, args: opts.lspArgs ?? [] }
@@ -164,6 +208,9 @@ async function withMcpSession(opts, fn) {
 
 async function main() {
   const argv = process.argv.slice(2);
+  if (argv.includes("--test-safe-delete-negative")) {
+    process.exit(testSafeDeleteDiskNegativeFixture());
+  }
   const opts = parseCommon(argv);
   if (opts.help || !opts.sub) {
     usage();
@@ -395,6 +442,7 @@ async function main() {
     }
     if (opts.tool === "safe_delete_symbol") {
       const targetPath = callArgs.filePath;
+      const symbolName = String(callArgs.symbolName ?? "").trim();
       if (!targetPath || !existsSync(targetPath)) {
         console.error(
           JSON.stringify({
@@ -405,13 +453,23 @@ async function main() {
         );
         process.exit(1);
       }
-      const disk = readFileSync(targetPath, "utf8");
-      if (/procedure\s+TSmoke\.Consume/i.test(disk)) {
+      if (!symbolName) {
         console.error(
           JSON.stringify({
             ok: false,
             tool: opts.tool,
-            error: "safe_delete_symbol: TSmoke.Consume ainda presente no arquivo",
+            error: "safe_delete_symbol sem symbolName para verificacao em disco",
+          }),
+        );
+        process.exit(1);
+      }
+      const absent = assertSymbolAbsentOnDisk(targetPath, symbolName);
+      if (!absent.ok) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: `safe_delete_symbol: ${absent.error}`,
           }),
         );
         process.exit(1);
