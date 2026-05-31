@@ -39,6 +39,21 @@ func TestPublicTools_ReadmeAndClaudeAlignWithInventory(t *testing.T) {
 		t.Fatalf("README missing critical tools: %v", missingCritical)
 	}
 
+	catalog, err := os.ReadFile("docs/MCP_TOOLS_PUBLIC.md")
+	if err != nil {
+		t.Fatal("docs/MCP_TOOLS_PUBLIC.md required for public tool catalog without opening Go code")
+	}
+	catalogText := string(catalog)
+	var missingCatalog []string
+	for _, entry := range inventory {
+		if !strings.Contains(catalogText, "| "+entry.Name+" |") && !strings.Contains(catalogText, "`"+entry.Name+"`") {
+			missingCatalog = append(missingCatalog, entry.Name)
+		}
+	}
+	if len(missingCatalog) > 0 {
+		t.Fatalf("docs/MCP_TOOLS_PUBLIC.md missing tools: %v", missingCatalog)
+	}
+
 	if claudeText != "" {
 		if strings.Contains(claudeText, "211 passed") || strings.Contains(claudeText, "213 passed") || strings.Contains(claudeText, "217 passed") {
 			t.Fatal("CLAUDE.md must not embed stale go test counts")
