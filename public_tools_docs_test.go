@@ -70,3 +70,34 @@ func TestPublicTools_ReadmeAndClaudeAlignWithInventory(t *testing.T) {
 func TestReadme_ReferencesRegisteredToolInventory(t *testing.T) {
 	TestPublicTools_ReadmeAndClaudeAlignWithInventory(t)
 }
+
+func TestMcpToolsPublic_CriticalFieldsComplete(t *testing.T) {
+	catalog, err := os.ReadFile("docs/MCP_TOOLS_PUBLIC.md")
+	if err != nil {
+		t.Fatalf("read catalog: %v", err)
+	}
+	text := string(catalog)
+	for _, name := range []string{"run_query", "diagnostics", "hover", "definition"} {
+		if !strings.Contains(text, "| "+name+" |") {
+			t.Fatalf("catalog missing row for %q", name)
+		}
+		idx := strings.Index(text, "| "+name+" |")
+		row := text[idx:]
+		if nl := strings.Index(row, "\n"); nl > 0 {
+			row = row[:nl]
+		}
+		lower := strings.ToLower(row)
+		if !strings.Contains(lower, "objective") && !strings.Contains(lower, "query") && !strings.Contains(lower, "diagnostic") && !strings.Contains(lower, "hover") && !strings.Contains(lower, "definition") {
+			t.Fatalf("row for %q missing objective hint", name)
+		}
+		if !strings.Contains(lower, "required") && !strings.Contains(row, "filePath") && !strings.Contains(row, "symbolName") && !strings.Contains(row, "query") {
+			t.Fatalf("row for %q missing required params hint", name)
+		}
+		if !strings.Contains(row, "{") {
+			t.Fatalf("row for %q missing JSON example", name)
+		}
+		if !strings.Contains(lower, "nfr") && !strings.Contains(lower, "lsp") && !strings.Contains(lower, "degradad") {
+			t.Fatalf("row for %q missing NFR note", name)
+		}
+	}
+}

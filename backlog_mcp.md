@@ -2,6 +2,50 @@
 
 # Backlog MCP
 
+## Reauditoria de qualidade — 2026-05-31 pós-fechamento produção e CLI First III
+
+Auditoria após a seção `pós-fechamento produção e CLI First II` ter sido marcada como `[x]`. O MCP segue beta operacional; o harness chama `tools/call`, mas ainda não prova tools LSP-backed críticas, documentação pública completa e ledger campo a campo.
+
+### Bloqueador
+
+- [x] **Como usuário agente do MCP, quero que o harness execute `tools/call` em tool LSP-backed crítica com payload útil, para que onboarding/get_node_types não fechem CLI First sem navegação/diagnóstico real.**
+  - 📄 Especificação: `.cursor/rules/project-guidelines.md` → CLI First
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: `test-mcp-tools-harness.ps1` chama `onboarding` e `get_node_types`; isso não cobre tool LSP-backed crítica como `run_query`, `diagnostics`, `hover` ou `definition`, e o harness não valida `isError == false`/payload útil.
+  - Critério de aceite: smoke chama ao menos uma tool local crítica e uma tool LSP-backed crítica com fake LSP/workspace hermético; falha para `isError`, erro semântico ou payload vazio indevido.
+  - 📝 Evidência 2026-05-31: `scripts/test-mcp-tools-harness.ps1` (`tools/call` run_query, hover); MCP_HARNESS_TEST OK.
+
+- [x] **Como integrador MCP, quero que `MCP_TOOLS_PUBLIC.md` detalhe parâmetros, exemplo mínimo, criticidade e nota NFR por tool crítica, para que a documentação pública não seja apenas lista nominal.**
+  - 📄 Especificação: `goal.md` → documentação pública completa de tools
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: o catálogo público atual lista nomes/fontes das 42 tools, mas não traz parâmetros obrigatórios, exemplos mínimos, criticidade nem NFR por tool crítica; testes validam schema em `tools/list`, não o Markdown público.
+  - Critério de aceite: teste documental falha se qualquer tool pública não tiver objetivo, parâmetros obrigatórios, exemplo mínimo e NFR quando crítica no documento público versionado/gerado.
+  - 📝 Evidência 2026-05-31: `docs/MCP_TOOLS_PUBLIC.md`; `TestMcpToolsPublic_CriticalFieldsComplete`; `go test . -count=1` 229/229 PASS.
+
+- [x] **Como operador de release MCP, quero comparação estruturada de ledger atual por data, SHA, comando e resultado em todas as fontes, para que histórico visível não mascare divergência atual.**
+  - 📄 Especificação: `backlog_novas_funcionalidades.md` → ledger final transversal
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: `LEDGER_CONSISTENCY OK` ainda depende de heurísticas e não compara data/SHA/comando/resultado em todas as fontes; blocos históricos divergentes continuam visíveis sem marcação estruturada que o script entenda.
+  - Critério de aceite: fontes atuais têm bloco estruturado único ou referência canônica; divergência de data, SHA, comando ou resultado em qualquer fonte atual falha; histórico divergente fica explicitamente marcado como histórico e ignorado por regra testada.
+  - 📝 Evidência 2026-05-31: `docs/LEDGER-TRANSVERSAL.md` (`ledger-current`); `scripts/check-ledger-consistency.ps1`; LEDGER_CONSISTENCY OK.
+
+### Core
+
+- [x] **Como mantenedor da governança MCP, quero que `Test-BehavioralEvidence` valide casos específicos de comportamento, para que citar `tools/call` não baste quando o aceite exige tools críticas.**
+  - 📄 Especificação: `goal.md` → evidência reexecutável alinhada ao aceite
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🟡 Média
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: o check comportamental é textual: se o aceite fala `tools/call`, basta a evidência citar `tools/call`, mesmo chamando apenas tools não representativas.
+  - Critério de aceite: regra MCP exige nomes de tools críticas representativas no comando/evidência e fixture negativa prova que `tools/call onboarding, get_node_types` não fecha aceite que pede diagnostics/hover/definition/run_query.
+  - 📝 Evidência 2026-05-31: `scripts/check-backlog-evidence.ps1` (`Test-BehavioralEvidence` LSP-backed); BACKLOG_EVIDENCE_CHECK OK.
+
 ## Reauditoria de qualidade — 2026-05-31 pós-fechamento produção e CLI First II
 
 Auditoria após a seção `pós-fechamento produção e CLI First` ter sido marcada como `[x]`. O MCP segue beta operacional; `tools/list` por harness melhorou, mas `tools/call`, documentação pública e ledger ainda têm falsos verdes.

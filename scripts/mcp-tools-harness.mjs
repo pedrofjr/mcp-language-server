@@ -3,7 +3,7 @@
  * Harness CLI MCP: tools/list e tools/call via stdio (CLI First).
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,6 +42,7 @@ function parseCommon(argv) {
     else if (!out.sub && (a === "list" || a === "call")) out.sub = a;
     else if (a === "--tool") out.tool = argv[++i];
     else if (a === "--args-json") out.argsJson = argv[++i];
+    else if (a === "--args-file") out.argsJson = readFileSync(argv[++i], "utf8");
     else throw new Error(`argumento desconhecido: ${a}`);
   }
   return out;
@@ -193,6 +194,21 @@ async function main() {
     const result = await withMcpSession(opts, (c) =>
       c.request("tools/call", { name: opts.tool, arguments: args }),
     );
+    if (result?.isError) {
+      console.error(JSON.stringify({ ok: false, tool: opts.tool, isError: true, result }));
+      process.exit(1);
+    }
+    const payload = result?.content ?? result;
+    if (
+      payload === undefined ||
+      payload === null ||
+      (Array.isArray(payload) && payload.length === 0)
+    ) {
+      console.error(
+        JSON.stringify({ ok: false, tool: opts.tool, error: "tools/call sem payload util" }),
+      );
+      process.exit(1);
+    }
     console.log(JSON.stringify({ ok: true, tool: opts.tool, result }, null, 2));
     process.exit(0);
   }
