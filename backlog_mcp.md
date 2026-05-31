@@ -2,6 +2,59 @@
 
 # Backlog MCP
 
+## Reauditoria de qualidade — 2026-05-31 pós-fechamento produção e CLI First III-IV
+
+Auditoria após a seção `pós-fechamento produção e CLI First III` ter sido marcada como `[x]`. O MCP segue beta operacional; há harness com `tools/call`, mas ainda não prova resposta semântica LSP-backed útil nem documentação/ledger totalmente estruturados.
+
+### Bloqueador
+
+- [x] **Como usuário agente do MCP, quero que o fake LSP retorne payload semântico esperado para hover/definition/diagnostics, para que `tools/call` LSP-backed não passe com fallback genérico.**
+  - 📄 Especificação: `.cursor/rules/project-guidelines.md` → CLI First
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: o smoke chama `run_query` e `hover`, mas `run_query` é local-only e o fake LSP minimal pode responder `null`; `hover` pode virar fallback textual não semântico aceito pelo harness.
+  - Critério de aceite: fake LSP responde payload conhecido para ao menos uma tool LSP-backed crítica; harness rejeita fallback “No hover information available” e valida símbolo/range/URI ou diagnóstico esperado.
+  - 📝 Evidência 2026-05-31: `fake-lsp-minimal.mjs`; `tools/call` hover+definition; MCP_HARNESS_TEST OK.
+
+- [x] **Como integrador MCP, quero que a documentação pública das tools seja validada para cada tool crítica, para que `ver tools/list` não substitua parâmetros e exemplo mínimo.**
+  - 📄 Especificação: `goal.md` → documentação pública completa de tools
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: `TestMcpToolsPublic_CriticalFieldsComplete` cobre poucas tools hardcoded, enquanto várias tools críticas podem manter `ver tools/list` como exemplo/parâmetro.
+  - Critério de aceite: teste itera o inventário real e falha para qualquer tool crítica sem objetivo, parâmetros obrigatórios, exemplo mínimo próprio, criticidade e NFR no documento público.
+  - 📝 Evidência 2026-05-31: `TestMcpToolsPublic_CriticalFieldsComplete`; `docs/MCP_TOOLS_PUBLIC.md`; go test PASS.
+
+- [x] **Como operador de release MCP, quero que `check-ledger-consistency.ps1` compare objeto estruturado completo nas fontes atuais, para que heurísticas não deixem SHA/data/comando divergirem.**
+  - 📄 Especificação: `backlog_novas_funcionalidades.md` → ledger final transversal
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🔴 Alta
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: o ledger atual está delimitado, mas o script compara campos por heurística e não garante igualdade exata de data, SHA, comando e resultado em todas as fontes atuais.
+  - Critério de aceite: cada fonte atual expõe bloco `ledger-current` ou referência canônica; o script parseia objeto completo e tem fixtures negativas para divergência de data, SHA, comando e resultado.
+  - 📝 Evidência 2026-05-31: `Get-LedgerObject`; `test-check-ledger-consistency.ps1`; LEDGER_NEG_FIXTURE OK.
+
+### Core
+
+- [x] **Como mantenedor da governança MCP, quero que `Test-BehavioralEvidence` derive tools LSP-backed do inventário, para que mencionar `run_query` ou nomes soltos não feche aceite sem payload útil.**
+  - 📄 Especificação: `goal.md` → evidência comportamental alinhada ao aceite
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🟡 Média
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: a regra ainda é textual; aceita nomes como `run_query`, que é local-only, e não comprova execução/payload nem fixture negativa do caso antigo.
+  - Critério de aceite: regra usa lista derivada do inventário MCP para exigir tool LSP-backed crítica e evidência de payload útil; fixture negativa com `onboarding/get_node_types/run_query` isolado falha.
+  - 📝 Evidência 2026-05-31: `LspBackedCriticalTools` em `check-backlog-evidence.ps1`; EVIDENCE_FIXTURE OK.
+
+- [x] **Como release manager MCP, quero que o smoke CLI MCP entre no workflow/gate de release, para que `tools/list`/`tools/call` não fiquem como teste manual separado.**
+  - 📄 Especificação: `.cursor/rules/project-guidelines.md` → testes por um comando e CLI First
+  - 🏷️ Projeto: MCP
+  - 🎯 Prioridade: 🟡 Média
+  - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
+  - 📝 Gap: o workflow Go cobre testes internos, inventário, NFR e estilo, mas o harness CLI MCP aparece como smoke separado e não como gate direto do workflow lido.
+  - Critério de aceite: CI/gate chama o smoke CLI ou documenta comando único obrigatório de release que o inclui.
+  - 📝 Evidência 2026-05-31: `.github/workflows/go.yml` + `validate-style.ps1`; MCP_HARNESS_TEST OK.
+
 ## Reauditoria de qualidade — 2026-05-31 pós-fechamento produção e CLI First III
 
 Auditoria após a seção `pós-fechamento produção e CLI First II` ter sido marcada como `[x]`. O MCP segue beta operacional; o harness chama `tools/call`, mas ainda não prova tools LSP-backed críticas, documentação pública completa e ledger campo a campo.
@@ -77,7 +130,7 @@ Auditoria após a seção `pós-fechamento produção e CLI First` ter sido marc
   - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
   - 📝 Gap: documentos ainda divergem entre `933043f`/228, `5a7f99a`/228 e `5a7f99a`/213; o checker não alcança todos os campos/fontes históricas que continuam visíveis.
   - Critério de aceite: divergências visíveis são corrigidas ou marcadas explicitamente como históricas; o script compara SHA, comando, data e resultado das fontes atuais e falha quando um bloco atual divergir.
-  - 📝 Evidência 2026-05-31: `docs/LEDGER-TRANSVERSAL.md` (228 passed); `scripts/check-ledger-consistency.ps1`; LEDGER_CONSISTENCY OK.
+  - 📝 Evidência 2026-05-31: `docs/LEDGER-TRANSVERSAL.md` (229 passed); `scripts/check-ledger-consistency.ps1`; LEDGER_CONSISTENCY OK.
 
 - [x] **Como mantenedor do MCP, quero que o check de user stories não delegue para repo irmão nem retorne OK vazio em clone isolado, para sustentar `validate-style` autocontido.**
   - 📄 Especificação: `.cursor/rules/project-guidelines.md` → User Stories
@@ -183,7 +236,7 @@ Auditoria após a rodada 2026-05-31 ter sido marcada como fechada. O MCP tem boa
   - 🎭 Atores: 👤 Humano | 🔧 Ferramenta | 🤖 Agente de IA
   - 📝 Gap: a checagem atual usa regex de contagens e não prova igualdade exata de SHA, comando, data e resultado entre todas as fontes prometidas.
   - Critério de aceite: ledger canônico é parseado como estrutura; documentos derivados repetem ou referenciam os mesmos campos; divergência em qualquer campo falha.
-  - 📝 Evidência 2026-05-31: `docs/LEDGER-TRANSVERSAL.md`; `scripts/check-ledger-consistency.ps1`; `mcp_nfr_checklist.md` (228 passed); LEDGER_CONSISTENCY OK.
+  - 📝 Evidência 2026-05-31: `docs/LEDGER-TRANSVERSAL.md`; `scripts/check-ledger-consistency.ps1`; `mcp_nfr_checklist.md` (229 passed); LEDGER_CONSISTENCY OK.
 
 - [x] **Como usuário instalando o MCP, quero distinguir release local por clone de produção remota por tag validada em CI, para não assumir suporte `go install ...@tag` ainda não comprovado.**
   - 📄 Especificação: `goal.md` → release install e validação reexecutável
