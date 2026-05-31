@@ -45,8 +45,8 @@ func registeredToolInventory() []ToolInventoryEntry {
 		{Name: "run_query", Kind: ToolKindLocalOnly, Mutating: false, Critical: true},
 		{Name: "get_diagnostics_for_symbol", Kind: ToolKindLSPBacked, Mutating: false, Critical: true},
 		{Name: "find_implementations", Kind: ToolKindLSPBacked, Mutating: false, Critical: false},
-		{Name: "get_node_at_position", Kind: ToolKindLocalOnly, Mutating: false, Critical: true},
-		{Name: "get_node_types", Kind: ToolKindLocalOnly, Mutating: false, Critical: false},
+		{Name: "get_node_at_position", Kind: ToolKindLSPBacked, Mutating: false, Critical: true},
+		{Name: "get_node_types", Kind: ToolKindLSPBacked, Mutating: false, Critical: false},
 		{Name: "onboarding", Kind: ToolKindLocalOnly, Mutating: false, Critical: true},
 		{Name: "check_onboarding_performed", Kind: ToolKindLocalOnly, Mutating: false, Critical: true},
 		{Name: "analyze_complexity", Kind: ToolKindLocalOnly, Mutating: false, Critical: false},
@@ -114,6 +114,9 @@ func lspBackedToolRequestContextCases(fixturePath string) []lspBackedToolRequest
 		{name: "find_implementations", args: map[string]any{
 			"filePath": fixturePath, "symbolName": "IFoo",
 		}, id: 659},
+		{name: "get_node_at_position", args: map[string]any{
+			"filePath": fixturePath, "line": 2, "column": 11,
+		}, id: 660},
 	}
 }
 
@@ -124,6 +127,8 @@ var localPrimaryLSPMutators = map[string]struct{}{
 	"replace_symbol_body":  {},
 	"insert_after_symbol":  {},
 	"insert_before_symbol": {},
+	"get_node_at_position": {},
+	"get_node_types":       {},
 }
 
 func lspBackedToolSlowLSPTimeoutCases(fixturePath string) []lspBackedToolRequestContextCase {

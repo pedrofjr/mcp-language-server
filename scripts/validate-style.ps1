@@ -1,10 +1,13 @@
 # Gates de estilo MCP: gofmt (changed .go only) + go vet + orcamento de linhas.
 $ErrorActionPreference = "Stop"
 $mcpRoot = Split-Path $PSScriptRoot -Parent
-$delphiOracle = Join-Path (Split-Path $mcpRoot -Parent) "Delphi_Oracle"
-$exceptions = Join-Path $delphiOracle "docs\file-size-exceptions.txt"
-$reportLines = Join-Path $delphiOracle "scripts\report-file-line-budget.ps1"
-$checkBacklog = Join-Path $delphiOracle "scripts\check-backlog-user-stories.ps1"
+$exceptions = Join-Path $mcpRoot "docs\file-size-exceptions.txt"
+$reportLines = Join-Path $mcpRoot "scripts\report-file-line-budget.ps1"
+$checkBacklog = Join-Path $mcpRoot "scripts\check-backlog-user-stories.ps1"
+if (-not (Test-Path $exceptions)) {
+    $delphiOracle = Join-Path (Split-Path $mcpRoot -Parent) "Delphi_Oracle"
+    $exceptions = Join-Path $delphiOracle "docs\file-size-exceptions.txt"
+}
 $git = "git"
 
 Set-Location $mcpRoot

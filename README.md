@@ -187,6 +187,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols. Each symbol now includes `trace` with `preferredSymbolName`, `symbolNameCandidates`, and ready-to-call `definition.symbolName` / `references.symbolName` bridge values.
 - `run_query`: **Fallback estrutural degradado** (tree-sitter local) quando o Oracle LSP não está disponível — não substitui análise semântica Delphi. Consulta em `.pas/.pp/.dpr/.dpk/.lpr/.inc` com `node_type`, fallback textual, `captureName` e `symbolName`.
 - `dependency_tree`: Grafo de dependências de units/símbolos via LSP (requer `--lsp` configurado).
+- `graph_query`, `semantic_search`, `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`, `safe_delete_symbol`, `get_diagnostics_for_symbol`, `get_node_at_position`: LSP-backed; ver `tools_inventory.go`.
 - `workspace_symbols`, `code_actions`, `memory_read`, `memory_write`, `memory_list`, `onboarding`, `check_onboarding_performed`: ver inventário completo em `tools_inventory.go` / `TestToolInventory_MatchesToolsList`.
 
 ## Fluxo inicial recomendado

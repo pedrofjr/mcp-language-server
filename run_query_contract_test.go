@@ -6,19 +6,50 @@ import (
 	"testing"
 )
 
-func TestRunQuery_ToolDescriptionDocumentsDegradedFallback(t *testing.T) {
+func TestRunQuery_PublicContractSingleSource(t *testing.T) {
+	needle := strings.ToLower(runQueryPublicContract)
+	if !strings.Contains(needle, "fallback") || !strings.Contains(needle, "lsp") {
+		t.Fatal("runQueryPublicContract must document degraded fallback and LSP authority")
+	}
+
 	src, err := os.ReadFile("tools.go")
 	if err != nil {
 		t.Fatalf("read tools.go: %v", err)
 	}
-	text := strings.ToLower(string(src))
-	if !strings.Contains(text, `mcp.newtool("run_query"`) {
-		t.Fatal("run_query tool registration missing")
+	if !strings.Contains(string(src), "runQueryPublicContract") {
+		t.Fatal("tools.go must reference runQueryPublicContract in run_query registration")
 	}
-	if !strings.Contains(text, "fallback") && !strings.Contains(text, "degradad") {
-		t.Fatal("run_query description must document degraded fallback")
+
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
 	}
-	if !strings.Contains(text, "lsp-backed") && !strings.Contains(text, "fonte autoritativa") {
-		t.Fatal("run_query description must reference LSP as authoritative")
+	readmeText := strings.ToLower(string(readme))
+	if !strings.Contains(readmeText, "fallback") || !strings.Contains(readmeText, "degradad") {
+		t.Fatal("README.md must document run_query degraded fallback")
 	}
+	if !strings.Contains(readmeText, "semântica") && !strings.Contains(readmeText, "semantica") {
+		t.Fatal("README.md must state run_query does not replace Delphi semantic analysis")
+	}
+	if !strings.Contains(readmeText, "lsp") {
+		t.Fatal("README.md must reference LSP-backed tools as authoritative")
+	}
+
+	claudePath := "CLAUDE.md"
+	if _, statErr := os.Stat(claudePath); statErr == nil {
+		claude, readErr := os.ReadFile(claudePath)
+		if readErr != nil {
+			t.Fatalf("read CLAUDE.md: %v", readErr)
+		}
+		claudeText := strings.ToLower(string(claude))
+		if strings.Contains(claudeText, "run_query") {
+			if !strings.Contains(claudeText, "fallback") && !strings.Contains(claudeText, "degradad") {
+				t.Fatal("CLAUDE.md must document run_query degraded fallback when run_query is mentioned")
+			}
+		}
+	}
+}
+
+func TestRunQuery_ToolDescriptionDocumentsDegradedFallback(t *testing.T) {
+	TestRunQuery_PublicContractSingleSource(t)
 }
