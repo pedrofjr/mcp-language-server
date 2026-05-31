@@ -226,17 +226,15 @@ async function main() {
       }
     }
     if (opts.tool === "definition") {
-      const hasLocation =
-        textBlob.includes("uri") ||
-        textBlob.includes("range") ||
-        textBlob.includes("file:") ||
-        (textBlob.includes("l") && textBlob.includes("c"));
-      if (!hasLocation) {
+      const hasSource =
+        textBlob.includes("procedure") &&
+        (textBlob.includes("consume") || textBlob.includes("tsmoke"));
+      if (!hasSource) {
         console.error(
           JSON.stringify({
             ok: false,
             tool: opts.tool,
-            error: "definition sem localizacao semantica (uri/range/file)",
+            error: "definition sem corpo/fonte Delphi semantico (procedure/consume)",
           }),
         );
         process.exit(1);
@@ -295,29 +293,125 @@ async function main() {
         process.exit(1);
       }
     }
+    let callArgs = {};
+    try {
+      callArgs = JSON.parse(opts.argsJson ?? "{}");
+    } catch {
+      callArgs = {};
+    }
     if (opts.tool === "edit_file") {
-      if (!textBlob.includes("42") && !textBlob.includes("applied") && !textBlob.includes("edit")) {
+      const targetPath = callArgs.filePath;
+      if (!targetPath || typeof targetPath !== "string") {
         console.error(
           JSON.stringify({
             ok: false,
             tool: opts.tool,
-            error: "edit_file sem evidencia de mutacao/diff",
+            error: "edit_file sem filePath nos args para verificacao em disco",
+          }),
+        );
+        process.exit(1);
+      }
+      if (!existsSync(targetPath)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: `edit_file alvo inexistente: ${targetPath}`,
+          }),
+        );
+        process.exit(1);
+      }
+      const disk = readFileSync(targetPath, "utf8");
+      if (!disk.includes("Marker = 42")) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "edit_file: arquivo em disco sem mutacao Marker = 42",
           }),
         );
         process.exit(1);
       }
     }
     if (opts.tool === "rename_symbol") {
-      if (
-        !textBlob.includes("rename") &&
-        !textBlob.includes("workspaceedit") &&
-        !textBlob.includes("tsmokerenamed")
-      ) {
+      const renamed =
+        textBlob.includes("successfully renamed") &&
+        textBlob.includes("tsmokerenamed") &&
+        textBlob.includes("updated");
+      if (!renamed) {
         console.error(
           JSON.stringify({
             ok: false,
             tool: opts.tool,
-            error: "rename_symbol sem evidencia de rename/edit",
+            error: "rename_symbol sem rename LSP aplicado (TSmokeRenamed/Updated)",
+          }),
+        );
+        process.exit(1);
+      }
+      const targetPath = callArgs.filePath;
+      if (targetPath && existsSync(targetPath)) {
+        const disk = readFileSync(targetPath, "utf8");
+        if (!disk.includes("TSmokeRenamed")) {
+          console.error(
+            JSON.stringify({
+              ok: false,
+              tool: opts.tool,
+              error: "rename_symbol: arquivo em disco sem TSmokeRenamed",
+            }),
+          );
+          process.exit(1);
+        }
+      }
+    }
+    const diskMarkers = {
+      replace_symbol_body: "HARNESS_BODY_REPLACED",
+      insert_after_symbol: "HARNESS_AFTER",
+      insert_before_symbol: "HARNESS_BEFORE",
+    };
+    if (diskMarkers[opts.tool]) {
+      const targetPath = callArgs.filePath;
+      const marker = diskMarkers[opts.tool];
+      if (!targetPath || !existsSync(targetPath)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: `${opts.tool} sem filePath para verificacao em disco`,
+          }),
+        );
+        process.exit(1);
+      }
+      const disk = readFileSync(targetPath, "utf8");
+      if (!disk.includes(marker)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: `${opts.tool}: arquivo em disco sem token esperado ${marker}`,
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "safe_delete_symbol") {
+      const targetPath = callArgs.filePath;
+      if (!targetPath || !existsSync(targetPath)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "safe_delete_symbol sem filePath para verificacao em disco",
+          }),
+        );
+        process.exit(1);
+      }
+      const disk = readFileSync(targetPath, "utf8");
+      if (/procedure\s+TSmoke\.Consume/i.test(disk)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "safe_delete_symbol: TSmoke.Consume ainda presente no arquivo",
           }),
         );
         process.exit(1);

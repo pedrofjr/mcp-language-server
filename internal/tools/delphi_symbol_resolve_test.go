@@ -262,3 +262,68 @@ func TestReplaceSymbolBody_QualifiedBarExPicksTargetRoutine(t *testing.T) {
 		t.Fatalf("expected ReplaceSymbolBody to succeed for TFoo.BarEx, got: %v", err)
 	}
 }
+
+func TestResolveDelphiRoutine_HarnessTMutateTarget(t *testing.T) {
+	src := strings.Join([]string{
+		"unit SymbolMutateHarness;",
+		"implementation",
+		"",
+		"procedure TMutate.Target;",
+		"begin",
+		"end;",
+		"",
+		"end.",
+	}, "\n")
+	bounded, err := resolveDelphiRoutineBoundaries(src, "TMutate.Target")
+	if err != nil {
+		t.Fatalf("resolveDelphiRoutineBoundaries: %v", err)
+	}
+	if bounded.beginLine <= 0 || bounded.endLine <= 0 {
+		t.Fatalf("unexpected bounds: %+v", bounded)
+	}
+}
+
+func TestReplaceSymbolBody_HarnessFixtureQualifiedTarget(t *testing.T) {
+	workspaceDir := t.TempDir()
+	filePath := filepath.Join(workspaceDir, "symbol_mutate.pas")
+	original := strings.Join([]string{
+		"unit SymbolMutateHarness;",
+		"implementation",
+		"",
+		"procedure TMutate.Target;",
+		"begin",
+		"  Writeln('seed');",
+		"end;",
+		"",
+		"procedure DeleteMe;",
+		"begin",
+		"  Writeln('delete-me');",
+		"end;",
+		"",
+		"end.",
+	}, "\n")
+	if err := os.WriteFile(filePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	applySymbolBodyTextEdits = func(_ context.Context, _ *lsp.Client, _ string, edits []TextEdit) (string, error) {
+		if len(edits) != 1 {
+			t.Fatalf("expected one edit, got %d", len(edits))
+		}
+		return "ok", nil
+	}
+	t.Cleanup(func() {
+		applySymbolBodyTextEdits = ApplyTextEdits
+	})
+
+	_, err := ReplaceSymbolBody(
+		context.Background(),
+		nil,
+		filePath,
+		"TMutate.Target",
+		"begin\n  // HARNESS_BODY_REPLACED\nend;",
+	)
+	if err != nil {
+		t.Fatalf("ReplaceSymbolBody harness fixture: %v", err)
+	}
+}

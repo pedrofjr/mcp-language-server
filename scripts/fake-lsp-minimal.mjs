@@ -53,6 +53,7 @@ function handleMessage(msg) {
         capabilities: {
           hoverProvider: true,
           definitionProvider: true,
+          renameProvider: true,
         },
         serverInfo: { name: "fake-lsp-minimal", version: "1.1.0" },
       },
@@ -116,6 +117,35 @@ function handleMessage(msg) {
           },
         },
       ],
+    });
+    return;
+  }
+  if (msg.method === "textDocument/rename") {
+    const uri = msg.params?.textDocument?.uri ?? DEF_URI;
+    const newName = msg.params?.newName ?? "Renamed";
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        changes: {
+          [uri]: [
+            {
+              range: {
+                start: { line: 5, character: 2 },
+                end: { line: 5, character: 8 },
+              },
+              newText: newName,
+            },
+            {
+              range: {
+                start: { line: 12, character: 10 },
+                end: { line: 12, character: 16 },
+              },
+              newText: newName,
+            },
+          ],
+        },
+      },
     });
     return;
   }
