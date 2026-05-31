@@ -1,10 +1,6 @@
 #!/usr/bin/env node
 /**
  * Harness CLI MCP: tools/list e tools/call via stdio (CLI First).
- *
- *   node scripts/mcp-tools-harness.mjs --help
- *   node scripts/mcp-tools-harness.mjs list --workspace <dir>
- *   node scripts/mcp-tools-harness.mjs call --workspace <dir> --tool <name> --args-json '{}'
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -13,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MCP_ROOT = path.resolve(__dirname, "..");
+const DEFAULT_FAKE_LSP = path.join(MCP_ROOT, "scripts", "fake-lsp-minimal.mjs");
 
 function usage() {
   console.log(`MCP tools harness (stdio JSON-RPC)
@@ -23,21 +20,24 @@ Subcomandos:
 
 Flags comuns:
   --workspace <dir>   Workspace (obrigatorio)
+  --lsp <cmd>         Comando LSP (default: node scripts/fake-lsp-minimal.mjs)
+  --lsp-args <json>   Args JSON array para o LSP apos --
   --timeout-ms <n>    Timeout (default 120000)
   --help
 
 Exemplo:
-  node scripts/mcp-tools-harness.mjs list --workspace .
-  node scripts/mcp-tools-harness.mjs call --workspace . --tool onboarding --args-json "{}"
+  node scripts/mcp-tools-harness.mjs list --workspace . --lsp node --lsp-args '["scripts/fake-lsp-minimal.mjs"]'
 `);
 }
 
 function parseCommon(argv) {
-  const out = { timeoutMs: 120_000 };
+  const out = { timeoutMs: 120_000, lspCommand: "", lspArgs: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--workspace") out.workspace = path.resolve(argv[++i]);
+    else if (a === "--lsp") out.lspCommand = argv[++i];
+    else if (a === "--lsp-args") out.lspArgs = JSON.parse(argv[++i]);
     else if (a === "--timeout-ms") out.timeoutMs = Number(argv[++i]);
     else if (!out.sub && (a === "list" || a === "call")) out.sub = a;
     else if (a === "--tool") out.tool = argv[++i];
@@ -47,9 +47,11 @@ function parseCommon(argv) {
   return out;
 }
 
-class JsonRpcClient {
-  constructor(proc) {
+/** MCP stdio uses newline-delimited JSON (mcp-go ServeStdio), not LSP Content-Length. */
+class NdjsonRpcClient {
+  constructor(proc, requestTimeoutMs) {
     this.proc = proc;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.nextId = 1;
     this.pending = new Map();
     this.buffer = "";
@@ -57,32 +59,33 @@ class JsonRpcClient {
     proc.stderr.on("data", (c) => process.stderr.write(c));
   }
 
+  rejectAllPending(reason) {
+    for (const { reject, timer } of this.pending.values()) {
+      if (timer) clearTimeout(timer);
+      reject(new Error(reason));
+    }
+    this.pending.clear();
+  }
+
   onData(chunk) {
     this.buffer += chunk;
     while (true) {
-      const headerEnd = this.buffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) return;
-      const header = this.buffer.slice(0, headerEnd);
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match) {
-        this.buffer = this.buffer.slice(headerEnd + 4);
-        continue;
-      }
-      const len = Number(match[1]);
-      const bodyStart = headerEnd + 4;
-      if (this.buffer.length < bodyStart + len) return;
-      const body = this.buffer.slice(bodyStart, bodyStart + len);
-      this.buffer = this.buffer.slice(bodyStart + len);
+      const lineEnd = this.buffer.indexOf("\n");
+      if (lineEnd < 0) return;
+      const line = this.buffer.slice(0, lineEnd).trim();
+      this.buffer = this.buffer.slice(lineEnd + 1);
+      if (!line) continue;
       try {
-        const msg = JSON.parse(body);
+        const msg = JSON.parse(line);
         if (msg.id !== undefined && this.pending.has(msg.id)) {
-          const { resolve, reject } = this.pending.get(msg.id);
+          const { resolve, reject, timer } = this.pending.get(msg.id);
           this.pending.delete(msg.id);
+          if (timer) clearTimeout(timer);
           if (msg.error) reject(new Error(JSON.stringify(msg.error)));
           else resolve(msg.result);
         }
       } catch {
-        /* skip */
+        /* skip non-json log lines */
       }
     }
   }
@@ -90,41 +93,60 @@ class JsonRpcClient {
   request(method, params) {
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-    const frame = `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.proc.stdin.write(frame, "utf8", (err) => err && reject(err));
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error(`request timeout: ${method}`));
+        }
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.proc.stdin.write(`${payload}\n`, "utf8", (err) => err && reject(err));
     });
   }
 
   notify(method, params) {
     const payload = JSON.stringify({ jsonrpc: "2.0", method, params });
-    const frame = `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
-    this.proc.stdin.write(frame, "utf8");
+    this.proc.stdin.write(`${payload}\n`, "utf8");
   }
 
   close() {
+    this.rejectAllPending("client closed");
     this.proc.stdin.end();
     this.proc.kill();
   }
 }
 
-function spawnMcp(workspace) {
+function resolveDefaultLsp() {
+  return {
+    command: process.execPath,
+    args: [DEFAULT_FAKE_LSP],
+  };
+}
+
+function spawnMcp(workspace, lspCommand, lspArgs) {
   const bin = path.join(
     MCP_ROOT,
     process.platform === "win32" ? "mcp-language-server.exe" : "mcp-language-server",
   );
-  const cmd = existsSync(bin) ? bin : "go";
-  const args = existsSync(bin)
-    ? ["--workspace", workspace]
-    : ["run", ".", "--workspace", workspace];
-  return spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], cwd: MCP_ROOT });
+  const mcpCmd = existsSync(bin) ? bin : "go";
+  const mcpRunArgs = existsSync(bin)
+    ? ["--workspace", workspace, "--lsp", lspCommand, "--", ...lspArgs]
+    : ["run", ".", "--workspace", workspace, "--lsp", lspCommand, "--", ...lspArgs];
+  return spawn(mcpCmd, mcpRunArgs, { stdio: ["pipe", "pipe", "pipe"], cwd: MCP_ROOT });
 }
 
-async function withMcpSession(workspace, timeoutMs, fn) {
-  const proc = spawnMcp(workspace);
-  const client = new JsonRpcClient(proc);
-  const timer = setTimeout(() => client.close(), timeoutMs);
+async function withMcpSession(opts, fn) {
+  const lsp = opts.lspCommand
+    ? { command: opts.lspCommand, args: opts.lspArgs ?? [] }
+    : resolveDefaultLsp();
+  const proc = spawnMcp(opts.workspace, lsp.command, lsp.args);
+  const client = new NdjsonRpcClient(proc, opts.timeoutMs);
+  const sessionTimer = setTimeout(() => {
+    client.rejectAllPending("session timeout");
+    client.close();
+  }, opts.timeoutMs * 2);
+
   try {
     await client.request("initialize", {
       protocolVersion: "2024-11-05",
@@ -134,7 +156,7 @@ async function withMcpSession(workspace, timeoutMs, fn) {
     client.notify("notifications/initialized", {});
     return await fn(client);
   } finally {
-    clearTimeout(timer);
+    clearTimeout(sessionTimer);
     client.close();
   }
 }
@@ -152,10 +174,13 @@ async function main() {
   }
 
   if (opts.sub === "list") {
-    const tools = await withMcpSession(opts.workspace, opts.timeoutMs, (c) =>
-      c.request("tools/list", {}),
-    );
-    console.log(JSON.stringify({ ok: true, tools }, null, 2));
+    const tools = await withMcpSession(opts, (c) => c.request("tools/list", {}));
+    const count = tools?.tools?.length ?? 0;
+    if (count === 0) {
+      console.error(JSON.stringify({ ok: false, error: "tools/list vazio" }));
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ ok: true, toolCount: count, tools }, null, 2));
     process.exit(0);
   }
 
@@ -165,7 +190,7 @@ async function main() {
       process.exit(1);
     }
     const args = opts.argsJson ? JSON.parse(opts.argsJson) : {};
-    const result = await withMcpSession(opts.workspace, opts.timeoutMs, (c) =>
+    const result = await withMcpSession(opts, (c) =>
       c.request("tools/call", { name: opts.tool, arguments: args }),
     );
     console.log(JSON.stringify({ ok: true, tool: opts.tool, result }, null, 2));

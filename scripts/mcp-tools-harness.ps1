@@ -7,7 +7,9 @@ param(
     [string]$Workspace = "",
     [string]$Tool = "",
     [string]$ArgsJson = "{}",
-    [int]$TimeoutMs = 120000
+    [int]$TimeoutMs = 120000,
+    [string]$Lsp = "",
+    [string]$LspArgs = "[]"
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +23,7 @@ if ($Help -or -not $Subcommand) {
 
 $nodeArgs += $Subcommand
 if ($Workspace) { $nodeArgs += @("--workspace", $Workspace) }
+if ($Lsp) { $nodeArgs += @("--lsp", $Lsp, "--lsp-args", $LspArgs) }
 if ($TimeoutMs) { $nodeArgs += @("--timeout-ms", $TimeoutMs) }
 if ($Subcommand -eq "call") {
     $nodeArgs += @("--tool", $Tool, "--args-json", $ArgsJson)

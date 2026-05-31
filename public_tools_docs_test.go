@@ -21,13 +21,17 @@ func TestPublicTools_ReadmeAndClaudeAlignWithInventory(t *testing.T) {
 		claudeText = string(data)
 	}
 
+	if !strings.Contains(readmeText, "tools/list") {
+		t.Fatal("README must document MCP tools/list for full public tool catalog")
+	}
+
 	inventory := registeredToolInventory()
 	var missingCritical []string
 	for _, entry := range inventory {
 		if !entry.Critical {
 			continue
 		}
-		if !strings.Contains(readmeText, "`"+entry.Name+"`") && !strings.Contains(readmeText, entry.Name) {
+		if !strings.Contains(readmeText, entry.Name) {
 			missingCritical = append(missingCritical, entry.Name)
 		}
 	}
@@ -41,6 +45,9 @@ func TestPublicTools_ReadmeAndClaudeAlignWithInventory(t *testing.T) {
 		}
 		if !strings.Contains(strings.ToLower(claudeText), "lsp") {
 			t.Fatal("CLAUDE.md must state LSP as authoritative Delphi source")
+		}
+		if !strings.Contains(claudeText, "tools_inventory") && !strings.Contains(claudeText, "tools/list") {
+			t.Fatal("CLAUDE.md must reference tools_inventory or tools/list for public catalog")
 		}
 	}
 }
