@@ -18,13 +18,26 @@ if ($LASTEXITCODE -ne 0) {
 $argsDir = Join-Path $env:TEMP ("mcp-harness-args-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $argsDir -Force | Out-Null
 try {
+    $editTarget = Join-Path $argsDir "edit-target.pas"
+    @(
+        "unit EditHarness;",
+        "interface",
+        "implementation",
+        "const",
+        "  Marker = 1;",
+        "end."
+    ) | Set-Content -Path $editTarget -Encoding UTF8
+    $editAbs = (Resolve-Path $editTarget).Path.Replace('\', '/')
+
     $calls = @(
         @("hover", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}')),
         @("definition", '{"symbolName":"TSmoke.Consume"}'),
         @("diagnostics", ('{"filePath":"' + $fixtureAbs + '"}')),
         @("references", '{"symbolName":"TSmoke.Consume"}'),
         @("workspace_symbols", '{"query":"TSmoke"}'),
-        @("code_actions", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}'))
+        @("code_actions", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}')),
+        @("edit_file", ('{"filePath":"' + $editAbs + '","edits":[{"startLine":5,"startColumn":1,"endLine":5,"endColumn":20,"newText":"  Marker = 42;"}]}')),
+        @("rename_symbol", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4,"newName":"TSmokeRenamed"}'))
     )
     foreach ($pair in $calls) {
         $tool = $pair[0]

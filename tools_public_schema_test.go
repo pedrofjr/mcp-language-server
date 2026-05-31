@@ -26,13 +26,19 @@ func requiredKeysForCriticalTool(name string, fixturePath string) []string {
 	switch name {
 	case "get_symbols_overview", "ast_summary", "dependency_tree":
 		return []string{"uri"}
-	case "graph_query", "call_graph", "graph_neighbors", "graph_node":
+	case "graph_query":
+		return []string{"uri"}
+	case "call_graph", "graph_neighbors", "graph_node":
 		return []string{"symbolName"}
 	case "replace_symbol_body":
-		return []string{"symbolName", "newBody"}
+		return []string{"filePath", "symbolName", "newBody"}
 	case "insert_after_symbol", "insert_before_symbol":
-		return []string{"symbolName", "newCode"}
-	case "safe_delete_symbol", "get_diagnostics_for_symbol", "find_implementations":
+		return []string{"filePath", "symbolName", "text"}
+	case "safe_delete_symbol":
+		return []string{"filePath", "symbolName"}
+	case "get_diagnostics_for_symbol":
+		return []string{"filePath", "symbolName"}
+	case "find_implementations":
 		return []string{"symbolName"}
 	case "rename_symbol":
 		return []string{"filePath", "line", "column", "newName"}
@@ -42,7 +48,9 @@ func requiredKeysForCriticalTool(name string, fixturePath string) []string {
 		return nil
 	case "check_onboarding_performed":
 		return []string{"projectPath"}
-	case "memory_write", "write_memory", "memory_edit", "edit_memory":
+	case "memory_write", "write_memory":
+		return []string{"title", "content"}
+	case "memory_edit", "edit_memory":
 		return []string{"id", "content"}
 	case "memory_read", "read_memory", "memory_delete", "delete_memory":
 		return []string{"id"}

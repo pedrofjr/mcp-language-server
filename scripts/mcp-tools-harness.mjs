@@ -295,6 +295,34 @@ async function main() {
         process.exit(1);
       }
     }
+    if (opts.tool === "edit_file") {
+      if (!textBlob.includes("42") && !textBlob.includes("applied") && !textBlob.includes("edit")) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "edit_file sem evidencia de mutacao/diff",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "rename_symbol") {
+      if (
+        !textBlob.includes("rename") &&
+        !textBlob.includes("workspaceedit") &&
+        !textBlob.includes("tsmokerenamed")
+      ) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "rename_symbol sem evidencia de rename/edit",
+          }),
+        );
+        process.exit(1);
+      }
+    }
     console.log(JSON.stringify({ ok: true, tool: opts.tool, result }, null, 2));
     process.exit(0);
   }
