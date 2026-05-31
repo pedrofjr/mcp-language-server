@@ -20,7 +20,11 @@ New-Item -ItemType Directory -Path $argsDir -Force | Out-Null
 try {
     $calls = @(
         @("hover", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}')),
-        @("definition", '{"symbolName":"TSmoke.Consume"}')
+        @("definition", '{"symbolName":"TSmoke.Consume"}'),
+        @("diagnostics", ('{"filePath":"' + $fixtureAbs + '"}')),
+        @("references", '{"symbolName":"TSmoke.Consume"}'),
+        @("workspace_symbols", '{"query":"TSmoke"}'),
+        @("code_actions", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}'))
     )
     foreach ($pair in $calls) {
         $tool = $pair[0]
@@ -46,5 +50,5 @@ finally {
     Remove-Item -Recurse -Force $argsDir -ErrorAction SilentlyContinue
 }
 
-Write-Host "MCP_HARNESS_TEST OK (list + tools/call hover, definition LSP-backed)"
+Write-Host "MCP_HARNESS_TEST OK (list + tools/call matriz critica LSP-backed)"
 exit 0

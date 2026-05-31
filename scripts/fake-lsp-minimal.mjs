@@ -82,6 +82,69 @@ function handleMessage(msg) {
     });
     return;
   }
+  if (msg.method === "textDocument/references") {
+    const uri = msg.params?.textDocument?.uri ?? DEF_URI;
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: [
+        {
+          uri,
+          range: {
+            start: { line: 8, character: 4 },
+            end: { line: 8, character: 10 },
+          },
+        },
+      ],
+    });
+    return;
+  }
+  if (msg.method === "workspace/symbol") {
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: [
+        {
+          name: "TSmoke",
+          kind: 5,
+          location: {
+            uri: DEF_URI,
+            range: {
+              start: { line: 4, character: 2 },
+              end: { line: 4, character: 14 },
+            },
+          },
+        },
+      ],
+    });
+    return;
+  }
+  if (msg.method === "textDocument/codeAction") {
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: [
+        {
+          title: "Add unit Trim to uses",
+          kind: "quickfix",
+          edit: {
+            changes: {
+              [DEF_URI]: [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 0, character: 0 },
+                  },
+                  newText: "",
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+    return;
+  }
   if (msg.method === "shutdown") {
     writeMessage({ jsonrpc: "2.0", id: msg.id, result: null });
     return;

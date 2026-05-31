@@ -230,13 +230,66 @@ async function main() {
         textBlob.includes("uri") ||
         textBlob.includes("range") ||
         textBlob.includes("file:") ||
-        textBlob.includes("l") && textBlob.includes("c");
+        (textBlob.includes("l") && textBlob.includes("c"));
       if (!hasLocation) {
         console.error(
           JSON.stringify({
             ok: false,
             tool: opts.tool,
             error: "definition sem localizacao semantica (uri/range/file)",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "diagnostics") {
+      if (!textBlob.includes("e001") && !textBlob.includes("diagnostic")) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "diagnostics sem codigo/mensagem semantica",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "references") {
+      if (
+        !textBlob.includes("range") &&
+        !textBlob.includes("uri") &&
+        !textBlob.includes("reference") &&
+        !textBlob.includes("tsmoke")
+      ) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "references sem conteudo semantico",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "workspace_symbols") {
+      if (!textBlob.includes("tsmoke")) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "workspace_symbols sem simbolo esperado",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "code_actions") {
+      if (!textBlob.includes("quickfix") && !textBlob.includes("trim")) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "code_actions sem quickfix/trim semantico",
           }),
         );
         process.exit(1);

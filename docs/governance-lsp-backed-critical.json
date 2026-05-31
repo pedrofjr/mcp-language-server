@@ -1,0 +1,24 @@
+{
+  "generatedFrom": "tools_inventory.go registeredToolInventory",
+  "description": "Critical LSP-backed MCP tools for governance behavioral evidence (Delphi_Oracle check-backlog-evidence.ps1)",
+  "tools": [
+    "code_actions",
+    "definition",
+    "dependency_tree",
+    "diagnostics",
+    "edit_file",
+    "get_diagnostics_for_symbol",
+    "get_node_at_position",
+    "get_symbols_overview",
+    "graph_query",
+    "hover",
+    "insert_after_symbol",
+    "insert_before_symbol",
+    "references",
+    "rename_symbol",
+    "replace_symbol_body",
+    "safe_delete_symbol",
+    "semantic_search",
+    "workspace_symbols"
+  ]
+}
