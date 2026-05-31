@@ -185,7 +185,7 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 - `rename_symbol`: Rename a symbol across a project.
 - `edit_file`: Allows making multiple text edits to a file based on line numbers. Provides a more reliable and context-economical way to edit files compared to search and replace based edit tools.
 - `get_symbols_overview`: Aggregates `workspace/symbol` results by file/unit and returns a compact JSON summary with totals and grouped symbols. Each symbol now includes `trace` with `preferredSymbolName`, `symbolNameCandidates`, and ready-to-call `definition.symbolName` / `references.symbolName` bridge values.
-- `run_query`: Consulta estrutural tree-sitter Delphi 6 no workspace (`.pas`, `.pp`, `.dpr`, `.dpk`, `.lpr`, `.inc`) com `node_type`, fallback textual, `captureName` e `symbolName`.
+- `run_query`: **Fallback estrutural degradado** (tree-sitter local) quando o Oracle LSP não está disponível — não substitui análise semântica Delphi. Consulta em `.pas/.pp/.dpr/.dpk/.lpr/.inc` com `node_type`, fallback textual, `captureName` e `symbolName`.
 - `dependency_tree`: Grafo de dependências de units/símbolos via LSP (requer `--lsp` configurado).
 - `workspace_symbols`, `code_actions`, `memory_read`, `memory_write`, `memory_list`, `onboarding`, `check_onboarding_performed`: ver inventário completo em `tools_inventory.go` / `TestToolInventory_MatchesToolsList`.
 

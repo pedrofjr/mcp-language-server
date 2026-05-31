@@ -1,0 +1,18 @@
+# path | dono | data | motivo | plano
+tools.go | MCP | 2026-05-30 | registro central de tools MCP | extrair handlers por dominio; < 500 linhas
+tools_registration_regression_test.go | MCP | 2026-05-30 | contrato tools/list | particionar por capability
+internal/tools/lsp-utilities.go | MCP | 2026-05-30 | utilitarios LSP compartilhados | modularizar
+internal/tools/references.go | MCP | 2026-05-30 | tool references LSP-backed | fatiar por fluxo
+internal/tools/edit_file_test.go | MCP | 2026-05-30 | regressao edit_file | dividir cenarios
+internal/tools/get_symbols_overview_test.go | MCP | 2026-05-30 | regressao symbols overview | dividir cenarios
+internal/utilities/edit_test.go | MCP | 2026-05-30 | utilitarios de edicao | extrair helpers
+internal/watcher/watcher.go | MCP | 2026-05-30 | watcher de workspace | refatorar modulos
+internal/tools/sprint2_test.go | MCP | 2026-05-30 | suite sprint2 | dividir por tool
+internal/tools/symbol_edit_test.go | MCP | 2026-05-30 | symbol edit regressao | dividir cenarios
+internal/tools/delphi_oracle_fallback_test.go | MCP | 2026-05-30 | fallback Delphi | manter como suite dedicada
+tools_request_context_regression_test.go | MCP | 2026-05-30 | contexto de request | particionar
+internal/lsp/client.go | MCP | 2026-05-30 | cliente LSP | extrair transporte/protocolo
+internal/tools/capabilities_regression_test.go | MCP | 2026-05-30 | capabilities regressao | dividir por capability
+internal/tools/delphi_oracle_fallback.go | MCP | 2026-05-30 | fallback sem LSP | modularizar
+internal/protocol/tsjson.go | MCP | 2026-05-30 | gerado/protocolo | upstream generate
+internal/protocol/tsprotocol.go | MCP | 2026-05-30 | gerado/protocolo | upstream generate

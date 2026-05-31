@@ -27,10 +27,12 @@ jobs:
       - name: Run root MCP contract suite (release install, NFR, timeout/cancel, observability)
         run: go test . -count=1
 
-      - name: MCP validate-style (gofmt, vet, line budget when monorepo sibling present)
+      - name: MCP validate-style (gofmt, vet, line budget)
         shell: pwsh
         run: |
-          if (Test-Path "../Delphi_Oracle/docs/file-size-exceptions.txt") {
+          if (Test-Path "./docs/file-size-exceptions.txt") {
+            & ./scripts/validate-style.ps1
+          } elseif (Test-Path "../Delphi_Oracle/docs/file-size-exceptions.txt") {
             & ./scripts/validate-style.ps1
           } else {
             Write-Host "SKIP file line budget: ../Delphi_Oracle not checked out; running gofmt+vet subset"
