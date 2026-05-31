@@ -71,33 +71,61 @@ func TestReadme_ReferencesRegisteredToolInventory(t *testing.T) {
 	TestPublicTools_ReadmeAndClaudeAlignWithInventory(t)
 }
 
+func criticalCatalogRow(text, name string) string {
+	needle := "| " + name + " |"
+	idx := strings.Index(text, needle)
+	if idx < 0 {
+		return ""
+	}
+	row := text[idx:]
+	if nl := strings.Index(row, "\n"); nl > 0 {
+		row = row[:nl]
+	}
+	return row
+}
+
 func TestMcpToolsPublic_CriticalFieldsComplete(t *testing.T) {
 	catalog, err := os.ReadFile("docs/MCP_TOOLS_PUBLIC.md")
 	if err != nil {
 		t.Fatalf("read catalog: %v", err)
 	}
 	text := string(catalog)
-	for _, name := range []string{"run_query", "diagnostics", "hover", "definition"} {
-		if !strings.Contains(text, "| "+name+" |") {
-			t.Fatalf("catalog missing row for %q", name)
+	for _, entry := range registeredToolInventory() {
+		if !entry.Critical {
+			continue
 		}
-		idx := strings.Index(text, "| "+name+" |")
-		row := text[idx:]
-		if nl := strings.Index(row, "\n"); nl > 0 {
-			row = row[:nl]
+		name := entry.Name
+		row := criticalCatalogRow(text, name)
+		if row == "" {
+			t.Fatalf("catalog missing row for critical tool %q", name)
 		}
 		lower := strings.ToLower(row)
-		if !strings.Contains(lower, "objective") && !strings.Contains(lower, "query") && !strings.Contains(lower, "diagnostic") && !strings.Contains(lower, "hover") && !strings.Contains(lower, "definition") {
-			t.Fatalf("row for %q missing objective hint", name)
-		}
-		if !strings.Contains(lower, "required") && !strings.Contains(row, "filePath") && !strings.Contains(row, "symbolName") && !strings.Contains(row, "query") {
-			t.Fatalf("row for %q missing required params hint", name)
+		if strings.Contains(lower, "ver tools/list") {
+			t.Fatalf("row for critical tool %q must include own JSON example, not tools/list deferral", name)
 		}
 		if !strings.Contains(row, "{") {
 			t.Fatalf("row for %q missing JSON example", name)
 		}
-		if !strings.Contains(lower, "nfr") && !strings.Contains(lower, "lsp") && !strings.Contains(lower, "degradad") {
-			t.Fatalf("row for %q missing NFR note", name)
+		if !strings.Contains(lower, "yes") {
+			t.Fatalf("row for %q missing Critical=yes marker", name)
+		}
+		hasParams := strings.Contains(lower, "required") ||
+			strings.Contains(row, "filePath") ||
+			strings.Contains(row, "symbolName") ||
+			strings.Contains(row, "query") ||
+			strings.Contains(row, "uri") ||
+			strings.Contains(row, "projectPath") ||
+			strings.Contains(row, "id") ||
+			strings.Contains(row, "content") ||
+			strings.Contains(row, "title") ||
+			strings.Contains(row, "(nenhum)")
+		if !hasParams {
+			t.Fatalf("row for %q missing required params hint", name)
+		}
+		if !strings.Contains(lower, "nfr") && !strings.Contains(lower, "lsp") &&
+			!strings.Contains(lower, "degradad") && !strings.Contains(lower, "local") &&
+			!strings.Contains(lower, "mutating") {
+			t.Fatalf("row for %q missing NFR/criticidade note", name)
 		}
 	}
 }

@@ -209,6 +209,39 @@ async function main() {
       );
       process.exit(1);
     }
+    const textBlob = JSON.stringify(payload).toLowerCase();
+    if (opts.tool === "hover") {
+      if (
+        textBlob.includes("no hover information") ||
+        !textBlob.includes("harness") && !textBlob.includes("tsmoke")
+      ) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "hover sem payload semantico LSP (fallback generico)",
+          }),
+        );
+        process.exit(1);
+      }
+    }
+    if (opts.tool === "definition") {
+      const hasLocation =
+        textBlob.includes("uri") ||
+        textBlob.includes("range") ||
+        textBlob.includes("file:") ||
+        textBlob.includes("l") && textBlob.includes("c");
+      if (!hasLocation) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            tool: opts.tool,
+            error: "definition sem localizacao semantica (uri/range/file)",
+          }),
+        );
+        process.exit(1);
+      }
+    }
     console.log(JSON.stringify({ ok: true, tool: opts.tool, result }, null, 2));
     process.exit(0);
   }

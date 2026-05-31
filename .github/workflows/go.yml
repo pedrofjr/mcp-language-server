@@ -27,7 +27,7 @@ jobs:
       - name: Run root MCP contract suite (release install, NFR, timeout/cancel, observability)
         run: go test . -count=1
 
-      - name: MCP validate-style (gofmt, vet, line budget)
+      - name: MCP validate-style (gofmt, vet, line budget, tools harness)
         shell: pwsh
         run: |
           if (-not (Test-Path "./docs/file-size-exceptions.txt")) {
@@ -35,6 +35,10 @@ jobs:
             exit 1
           }
           & ./scripts/validate-style.ps1
+      - name: MCP tools/call harness smoke
+        shell: pwsh
+        run: |
+          & ./scripts/test-mcp-tools-harness.ps1
       - name: Run Delphi structural tool tests
         run: go test ./internal/tools/... -run "RunQuery|BuildQuery" -count=1
 

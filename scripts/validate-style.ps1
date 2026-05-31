@@ -45,5 +45,12 @@ Write-Host "=== file line budget (MCP root, documented exceptions) ==="
 & $reportLines -Root $mcpRoot -ExceptionsFile $exceptions
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+$harnessTest = Join-Path $PSScriptRoot "test-mcp-tools-harness.ps1"
+if (Test-Path $harnessTest) {
+    Write-Host "=== mcp tools harness smoke ==="
+    & $harnessTest
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 Write-Host "MCP validate-style OK"
 exit 0

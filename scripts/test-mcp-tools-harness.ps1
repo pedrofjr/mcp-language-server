@@ -19,16 +19,25 @@ $argsDir = Join-Path $env:TEMP ("mcp-harness-args-" + [Guid]::NewGuid().ToString
 New-Item -ItemType Directory -Path $argsDir -Force | Out-Null
 try {
     $calls = @(
-        @("run_query", '{"query":"class"}'),
-        @("hover", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}'))
+        @("hover", ('{"filePath":"' + $fixtureAbs + '","line":8,"column":4}')),
+        @("definition", '{"symbolName":"TSmoke.Consume"}')
     )
     foreach ($pair in $calls) {
         $tool = $pair[0]
         $argsFile = Join-Path $argsDir ($tool + ".json")
         [System.IO.File]::WriteAllText($argsFile, $pair[1])
-        & node $harness call --workspace $root --tool $tool --args-file $argsFile --timeout-ms 120000
-        if ($LASTEXITCODE -ne 0) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $out = & node $harness call --workspace $root --tool $tool --args-file $argsFile --timeout-ms 120000 2>&1 | Out-String
+        $callExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        if ($callExit -ne 0) {
             Write-Host "MCP_HARNESS_TEST FAIL: tools/call $tool" -ForegroundColor Red
+            Write-Host $out
+            exit 1
+        }
+        if ($out -match 'no hover information') {
+            Write-Host "MCP_HARNESS_TEST FAIL: hover fallback generico" -ForegroundColor Red
             exit 1
         }
     }
@@ -37,5 +46,5 @@ finally {
     Remove-Item -Recurse -Force $argsDir -ErrorAction SilentlyContinue
 }
 
-Write-Host "MCP_HARNESS_TEST OK (list + tools/call run_query, hover)"
+Write-Host "MCP_HARNESS_TEST OK (list + tools/call hover, definition LSP-backed)"
 exit 0
