@@ -440,6 +440,30 @@ async function main() {
         process.exit(1);
       }
     }
+    const semanticPatterns = {
+      get_symbols_overview: /uri|symbol|tsmoke/,
+      dependency_tree: /tree|treebysection/,
+      graph_query: /graph|nodes|edges/,
+      semantic_search: /semantic|symbol|match|tsmoke/,
+      run_query: /totalmatches|matches/,
+      get_diagnostics_for_symbol: /diagnostic|symbol|no diagnostic|e001/,
+      get_node_at_position: /tsmoke|token|identifier|node/,
+      onboarding: /unit|delphi|onboarding|entry|smoke/,
+      check_onboarding_performed: /executado|onboarding executado|performed/,
+      memory_write: /memory|id|title|gravada|sucesso/i,
+      memory_read: /harness|content|title|tags:/i,
+      memory_list: /tags:|\[[0-9a-f]{8}\]/i,
+    };
+    if (semanticPatterns[opts.tool] && !semanticPatterns[opts.tool].test(textBlob)) {
+      console.error(
+        JSON.stringify({
+          ok: false,
+          tool: opts.tool,
+          error: `${opts.tool} sem payload semantico esperado`,
+        }),
+      );
+      process.exit(1);
+    }
     if (opts.tool === "safe_delete_symbol") {
       const targetPath = callArgs.filePath;
       const symbolName = String(callArgs.symbolName ?? "").trim();

@@ -175,6 +175,86 @@ function handleMessage(msg) {
     });
     return;
   }
+  if (msg.method === "custom/dependencyTree") {
+    const uri = msg.params?.uri ?? DEF_URI;
+    const unitKey = uri.split("/").pop()?.replace(/\.pas$/i, "") ?? "smoke";
+    const key = unitKey.toLowerCase();
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        root: key,
+        tree: {
+          [key]: ["SysUtils", "Classes"],
+        },
+        treeBySection: {
+          [key]: {
+            interface: ["SysUtils"],
+            implementation: ["Classes"],
+          },
+        },
+        cycles: [],
+      },
+    });
+    return;
+  }
+  if (msg.method === "custom/graph/query") {
+    const uri = msg.params?.uri ?? DEF_URI;
+    const root = uri.split("/").pop()?.replace(/\.pas$/i, "") ?? "smoke";
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        root,
+        relationType: msg.params?.relationType ?? "uses_unit",
+        direction: msg.params?.direction ?? "both",
+        depth: msg.params?.depth ?? 1,
+        nodes: [
+          { id: root, kind: "unit", resolved: true },
+          { id: "SysUtils", kind: "unit", resolved: true },
+        ],
+        edges: [
+          {
+            source: root,
+            target: "SysUtils",
+            type: "uses_unit",
+            direction: "imports",
+          },
+        ],
+        stats: {
+          nodeCount: 2,
+          edgeCount: 1,
+          truncated: false,
+          rootResolved: true,
+        },
+      },
+    });
+    return;
+  }
+  if (msg.method === "custom/semanticSearch") {
+    writeMessage({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: {
+        results: [
+          {
+            symbol: "TSmoke.Consume",
+            unit: "smoke",
+            score: 0.9,
+            matchReason: "name + harness fixture",
+            location: {
+              uri: DEF_URI,
+              range: {
+                start: { line: 5, character: 2 },
+                end: { line: 5, character: 14 },
+              },
+            },
+          },
+        ],
+      },
+    });
+    return;
+  }
   if (msg.method === "shutdown") {
     writeMessage({ jsonrpc: "2.0", id: msg.id, result: null });
     return;

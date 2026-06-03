@@ -29,23 +29,33 @@ try {
     }
 
     function Invoke-McpCall([string]$tool, [string]$argsJson, [string]$expectPattern) {
+        $null = Invoke-McpCallCapture $tool $argsJson
+        if ($expectPattern -and $script:lastMcpOut -notmatch $expectPattern) {
+            Write-Host "MCP_HARNESS_TEST FAIL: $tool sem payload esperado ($expectPattern)" -ForegroundColor Red
+            Write-Host $script:lastMcpOut
+            exit 1
+        }
+    }
+
+    function Invoke-McpCallCapture([string]$tool, [string]$argsJson) {
         $argsFile = Join-Path $argsDir ($tool + ".json")
-        [System.IO.File]::WriteAllText($argsFile, $argsJson)
+        [System.IO.File]::WriteAllText($argsFile, $argsJson, [System.Text.UTF8Encoding]::new($false))
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
-        $out = & node $harness call --workspace $workspaceDir --tool $tool --args-file $argsFile --timeout-ms 120000 2>&1 | Out-String
+        $script:lastMcpOut = & node $harness call --workspace $workspaceDir --tool $tool --args-file $argsFile --timeout-ms 120000 2>&1 | Out-String
         $callExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
         if ($callExit -ne 0) {
             Write-Host "MCP_HARNESS_TEST FAIL: tools/call $tool" -ForegroundColor Red
-            Write-Host $out
+            Write-Host $script:lastMcpOut
             exit 1
         }
-        if ($expectPattern -and $out -notmatch $expectPattern) {
-            Write-Host "MCP_HARNESS_TEST FAIL: $tool sem payload esperado ($expectPattern)" -ForegroundColor Red
-            Write-Host $out
-            exit 1
-        }
+        return $script:lastMcpOut
+    }
+
+    function Get-DelphiFileUri([string]$absPath) {
+        $normalized = (Resolve-Path $absPath).Path.Replace('\', '/')
+        return "file:///$normalized"
     }
 
     $editTarget = Join-Path $workspaceDir "edit-target.pas"
@@ -99,6 +109,51 @@ try {
         }
     }
 
+    $fixtureUri = Get-DelphiFileUri (Join-Path $workspaceDir "smoke.pas")
+    $smokeAbsWin = (Resolve-Path (Join-Path $workspaceDir "smoke.pas")).Path
+
+    Invoke-McpCall "get_symbols_overview" (@{ query = "TSmoke" } | ConvertTo-Json -Compress) 'uri|symbol|TSmoke'
+    Invoke-McpCall "dependency_tree" (@{ uri = $fixtureUri } | ConvertTo-Json -Compress) 'tree|treeBySection'
+    Invoke-McpCall "graph_query" (@{ uri = $fixtureUri; direction = "both"; depth = 1 } | ConvertTo-Json -Compress) 'graph|nodes|edges'
+    Invoke-McpCall "semantic_search" (@{ query = "TSmoke"; limit = 5 } | ConvertTo-Json -Compress) 'semantic|TSmoke|symbol|match'
+    Invoke-McpCall "run_query" (@{ query = "TSmoke"; filePath = $smokeAbsWin; limit = 5 } | ConvertTo-Json -Compress) 'totalMatches|matches'
+    Invoke-McpCall "get_diagnostics_for_symbol" (@{ filePath = $smokeAbsWin; symbolName = "TSmoke" } | ConvertTo-Json -Compress) 'diagnostic|symbol|No diagnostic|E001'
+    Invoke-McpCall "get_node_at_position" (@{ filePath = $smokeAbsWin; line = 6; column = 11 } | ConvertTo-Json -Compress) 'TSmoke|token|identifier|node'
+
+    Invoke-McpCall "onboarding" (@{ projectPath = $workspaceDir } | ConvertTo-Json -Compress) 'unit|Delphi|onboarding|entry|smoke'
+    Invoke-McpCall "check_onboarding_performed" (@{ projectPath = $workspaceDir } | ConvertTo-Json -Compress) 'executado|Onboarding executado|performed'
+
+    $memDir = Join-Path $workspaceDir ".oracle-memory"
+    New-Item -ItemType Directory -Path $memDir -Force | Out-Null
+    $prevMem = $env:ORACLE_MEMORY_DIR
+    $env:ORACLE_MEMORY_DIR = $memDir
+    try {
+        $memTitle = "harness-mem-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+        $memWriteOut = Invoke-McpCallCapture "memory_write" (
+            @{ title = $memTitle; content = "harness memory content"; tags = @("harness") } | ConvertTo-Json -Compress
+        )
+        if ($memWriteOut -notmatch 'memory|id|title') {
+            Write-Host "MCP_HARNESS_TEST FAIL: memory_write sem payload util" -ForegroundColor Red
+            Write-Host $memWriteOut
+            exit 1
+        }
+        $memId = $null
+        if ($memWriteOut -match '"id"\s*:\s*"([0-9a-fA-F-]{36})"') {
+            $memId = $Matches[1]
+        } elseif ($memWriteOut -match '\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b') {
+            $memId = $Matches[1]
+        }
+        if (-not $memId) {
+            Write-Host "MCP_HARNESS_TEST FAIL: memory_write sem id capturavel" -ForegroundColor Red
+            Write-Host $memWriteOut
+            exit 1
+        }
+        Invoke-McpCall "memory_read" (@{ id = $memId } | ConvertTo-Json -Compress) ($memTitle + '|harness memory')
+        Invoke-McpCall "memory_list" '{}' ($memTitle + '|entries|memory')
+    } finally {
+        if ($null -ne $prevMem) { $env:ORACLE_MEMORY_DIR = $prevMem } else { Remove-Item Env:ORACLE_MEMORY_DIR -ErrorAction SilentlyContinue }
+    }
+
     if ($repoSnapshot -ne (Get-Content -Path $fixtureSrc -Raw)) {
         Write-Host "MCP_HARNESS_TEST FAIL: repo fixture smoke.pas foi mutado" -ForegroundColor Red
         exit 1
@@ -108,5 +163,5 @@ finally {
     Remove-Item -Recurse -Force $workspaceDir, $argsDir -ErrorAction SilentlyContinue
 }
 
-Write-Host "MCP_HARNESS_TEST OK (workspace hermetico + mutacoes + matriz critica)"
+Write-Host "MCP_HARNESS_TEST OK (workspace hermetico + mutacoes + matriz critica completa)"
 exit 0
