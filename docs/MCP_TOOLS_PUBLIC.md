@@ -51,6 +51,16 @@ Fonte de verdade operacional: `tools/list` + este catálogo. Paridade com `tools
 
 *(Demais tools seguem o mesmo padrao de colunas; nomes alinhados a `tools_inventory.go`.)*
 
+## Validação por agente/CI (CLI First)
+
+| Comando | Quando usar | Exige oracle-lsp real |
+|---------|-------------|----------------------|
+| `go test . -count=1` | Inventário completo de tools + regressões Go | Não (fake LSP no harness) |
+| `powershell -NoProfile -File scripts/test-mcp-tools-harness.ps1` | Gate de release: matriz crítica com `tools/call` e asserts | Não (fake LSP) |
+| `powershell -NoProfile -File scripts/test-mcp-tools-harness-negative.ps1` | Fixtures negativas (edição sem mutação, safe_delete) | Não |
+
+Saída esperada: `MCP_HARNESS_TEST OK (workspace hermetico + mutacoes + matriz critica completa)`.
+
 ## Detalhe — tools criticas LSP-backed (harness)
 
 ### run_query

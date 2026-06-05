@@ -26,7 +26,18 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
 
    **CLI reference:** run `mcp-language-server --help` for flags (`--workspace`, `--lsp`, `--search-path`, `--delphi-installation-path`, …). Exit code **0** on clean shutdown; **1** on startup or fatal server error. MCP tool responses use operational `OP_*` codes with `action:` and `recovery:` hints (see `tools_nfr_inventory.go` and `TestNFRGates_*` in this repo).
 
-   **Harness CLI First (agentes):** `scripts/mcp-tools-harness.ps1` — `list` (tools/list JSON) e `call` (tools/call com `--args-json`). Exemplo: `powershell -File scripts/mcp-tools-harness.ps1 list -Workspace .`
+   **Validação por agente/CI (comando agregado):** da raiz do repositório MCP:
+
+   ```powershell
+   go test . -count=1
+   powershell -NoProfile -File scripts/test-mcp-tools-harness.ps1
+   ```
+
+   - Exit **0** = matriz crítica (`tools_nfr_inventory`) exercitada com asserts semânticos (não só `tools/list`).
+   - Pré-requisitos: Go instalado; workspace temporário; `ORACLE_MEMORY_DIR` definido pelo script de harness; fake LSP mínimo para tools LSP-backed (ver `scripts/fake-lsp-minimal.mjs`).
+   - Mutating tools no harness: `edit_file`, `rename_symbol`, `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`, `safe_delete_symbol` (ver `scripts/test-mcp-tools-harness.ps1`).
+
+   Comandos granulares: `scripts/mcp-tools-harness.ps1 list` / `call --tool <name> --args-json '{...}'` — ver `docs/MCP_TOOLS_PUBLIC.md`.
 
 3. **Install a language server**: _follow one of the guides below_
 4. **Configure your MCP client**: _follow one of the guides below_
